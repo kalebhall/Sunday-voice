@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="change-me", min_length=8)
     jwt_algorithm: str = "HS256"
     jwt_access_token_ttl_minutes: int = 60
+    jwt_refresh_token_ttl_days: int = 14
+
+    # Login throttling (sliding window per client+email).
+    login_rate_limit_max_attempts: int = 10
+    login_rate_limit_window_seconds: float = 60.0
 
     # Database / Redis
     database_url: str = "postgresql+asyncpg://sundayvoice:sundayvoice@localhost:5432/sundayvoice"
