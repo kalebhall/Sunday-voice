@@ -24,13 +24,18 @@
 
 1. Open the operator console for the session.
 2. Select audio input (sound system, external mic, etc.).
-3. Choose transcription mode:
+3. Choose audio transport:
+   - **Chunked WebSocket (default)**: reliable, ~2–3s chunks of WebM/Opus
+     uploaded from the browser.
+   - **WebRTC**: continuous audio track to the server via aiortc; try this
+     if chunked uploads feel laggy or drop audio.
+4. Choose transcription mode:
    - Default: server-side (Whisper API).
    - Backup: browser Web Speech (only if server mode unavailable).
-4. Source language:
+5. Source language:
    - Auto-detect by default.
    - Manual override if needed.
-5. Start session:
+6. Start session:
    - System begins streaming audio, receiving transcripts, and sending translations.
 
 ## During the Meeting

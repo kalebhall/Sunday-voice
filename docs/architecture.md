@@ -10,9 +10,15 @@ Sunday Voice consists of:
    - Provides WebSocket endpoints for live text fan-out.
 
 2. **Media pipeline (transcription service)**
-   - Receives audio from operator browser. Transport mechanism is not finalized —
-     candidates are chunked uploads over WebSocket (MediaRecorder WebM/Opus) and
-     WebRTC-to-server via aiortc. Both will be prototyped before committing.
+   - Receives audio from operator browser via one of two transports, selectable
+     per session by the operator:
+     - **Chunked WebSocket uploads (default)**: browser MediaRecorder produces
+       ~2–3s WebM/Opus chunks sent over a WebSocket; server posts each chunk
+       to the Whisper API.
+     - **WebRTC-to-server (aiortc)**: browser sends a WebRTC audio track to
+       the server, which decodes and windows audio into Whisper requests.
+   - Both transports feed the same internal segment stream, so downstream
+     translation/fan-out code is transport-agnostic.
    - Buffers audio briefly.
    - Sends audio windows to the Whisper API for transcription (note: the Whisper
      HTTP API is request/response per chunk, not true bidirectional streaming).

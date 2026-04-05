@@ -63,9 +63,9 @@ Read the relevant doc before making decisions:
 
 ## Open decisions
 
-See `docs/open-questions.md`. The only remaining implementation decision is
-operator audio transport (chunked WebSocket uploads vs. WebRTC-to-server) —
-prototype both before committing.
+See `docs/open-questions.md`. Operator audio transport supports both chunked
+WebSocket uploads (default) and WebRTC-to-server, selectable per session in
+the operator console.
 
 ## Repository
 
