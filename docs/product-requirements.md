@@ -67,6 +67,8 @@ The first deployment is a single stake instance on a personal Ubuntu server (LXC
 
 ### Session Management
 
+- Pre-scheduled sessions are the primary creation path; ad hoc creation is
+  available as a fallback for unplanned meetings.
 - Create sessions ad hoc or from pre-scheduled entries.
 - Assign a name, scheduled start/end, and enabled languages.
 - Generate join info: QR code, short URL, and numeric session code.
@@ -128,6 +130,9 @@ The first deployment is a single stake instance on a personal Ubuntu server (LXC
   - Recent sessions.
   - API usage vs budget thresholds.
   - Error rates.
+- Admin can export anonymized aggregate stats as CSV (date, duration,
+  listener count, languages, provider usage, cost).
+- Expose a Prometheus-style `/metrics` endpoint for external monitoring.
 
 ## Acceptance Criteria (MVP)
 
