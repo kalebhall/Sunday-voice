@@ -11,20 +11,20 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("RETENTION_CLEANUP_ENABLED", "false")
 
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
+import pytest
+import pytest_asyncio
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 
-from app.api.deps import reset_login_rate_limiter  # noqa: E402
-from app.core.config import get_settings  # noqa: E402
-from app.db.session import get_session  # noqa: E402
-from app.main import app  # noqa: E402
-from app.models import Role, User  # noqa: E402
+from app.api.deps import reset_login_rate_limiter
+from app.core.config import get_settings
+from app.db.session import get_session
+from app.main import app
+from app.models import Role, Session, SessionLanguage, User
 
 
 @pytest.fixture(autouse=True)
@@ -39,20 +39,17 @@ def _clear_settings_cache() -> Iterator[None]:
 
 @pytest_asyncio.fixture
 async def db_sessionmaker() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    """Create only the auth-relevant tables in an in-memory sqlite DB.
+    """Create tables in an in-memory sqlite DB.
 
-    The full schema includes Postgres-specific types (JSONB, PG_UUID) that
-    sqlite can't materialise. The auth flows only need ``roles`` and
-    ``users``, so we create just those tables.
+    Uses checkfirst=True so Postgres-specific dialect types degrade
+    gracefully (PG_UUID -> CHAR(32), etc.).
     """
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with engine.begin() as conn:
-        await conn.run_sync(
-            lambda sync_conn: Role.__table__.create(sync_conn, checkfirst=True)
-        )
-        await conn.run_sync(
-            lambda sync_conn: User.__table__.create(sync_conn, checkfirst=True)
-        )
+        for tbl in (Role, User, Session, SessionLanguage):
+            await conn.run_sync(
+                lambda sync_conn, t=tbl: t.__table__.create(sync_conn, checkfirst=True)
+            )
     maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
     # Seed canonical roles.
