@@ -1,0 +1,25 @@
+[Unit]
+Description=Sunday Voice API (FastAPI / uvicorn)
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=sundayvoice
+Group=sundayvoice
+WorkingDirectory=/opt/sunday-voice
+EnvironmentFile=/opt/sunday-voice/.env
+ExecStart=/opt/sunday-voice/.venv/bin/uvicorn app.main:app \
+    --host 0.0.0.0 --port 8000 \
+    --app-dir /opt/sunday-voice/backend \
+    --workers 2 --proxy-headers
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/sunday-voice/var
+
+[Install]
+WantedBy=multi-user.target

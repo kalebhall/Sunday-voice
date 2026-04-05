@@ -1,0 +1,12 @@
+[Unit]
+Description=Sunday Voice retention / cleanup job
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=sundayvoice
+Group=sundayvoice
+WorkingDirectory=/opt/sunday-voice
+EnvironmentFile=/opt/sunday-voice/.env
+ExecStart=/opt/sunday-voice/.venv/bin/python -m app.services.cleanup
