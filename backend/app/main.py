@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_router
 from app.core.config import get_settings
+from app.core.logging import configure_logging
+from app.core.middleware import RequestIDMiddleware
 from app.ws import ws_router
 
 
@@ -23,6 +25,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    configure_logging(settings.app_log_level)
+
     app = FastAPI(
         title="Sunday Voice",
         version="0.1.0",
@@ -30,6 +34,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    app.add_middleware(RequestIDMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
@@ -43,7 +48,17 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:
+        """Liveness probe: process is running."""
         return {"status": "ok"}
+
+    @app.get("/readyz", tags=["health"])
+    async def readyz() -> dict[str, str]:
+        """Readiness probe: app is ready to serve traffic.
+
+        Dependency checks (DB, Redis, providers) will be wired in alongside
+        their respective startup hooks.
+        """
+        return {"status": "ready"}
 
     return app
 
