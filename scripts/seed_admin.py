@@ -27,13 +27,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "backend"))
 
-from passlib.context import CryptContext  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
+from app.core.security import hash_password  # noqa: E402
 from app.db.session import get_sessionmaker  # noqa: E402
 from app.models import ROLE_ADMIN, Role, User  # noqa: E402
-
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,7 +79,7 @@ async def seed_admin(email: str, display_name: str, password: str) -> int:
             user = User(
                 email=email,
                 display_name=display_name,
-                hashed_password=_pwd.hash(password),
+                hashed_password=hash_password(password),
                 role_id=admin_role.id,
                 is_active=True,
             )
