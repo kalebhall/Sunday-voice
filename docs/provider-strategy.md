@@ -24,6 +24,11 @@
 - Interface allows:
   - Multiple providers.
   - Fallback order.
+- Samoan quality validation:
+  - Ship with Google Cloud Translation as the default.
+  - Collect in-product thumbs-down feedback per segment to measure real-world
+    quality, especially for Samoan and Tagalog. Revisit provider choice after
+    field data.
 - Future:
   - Evaluate quality for Samoan/Tagalog.
   - Consider self-hosted models if quality and latency acceptable.

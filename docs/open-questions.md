@@ -1,12 +1,13 @@
 # Sunday Voice – Open Questions
 
-- Exact minimum supported browser versions (especially older Android/iOS).
-- Maximum transcript history shown to listeners.
-- TTS behavior:
-  - Segment size.
-  - Queuing and interruptions.
-- Best translation provider for Samoan quality.
-- How much pre-configuration vs ad hoc creation operators prefer for sessions.
-- Whether admins want export of anonymized usage stats.
-- Operator audio transport: chunked MediaRecorder uploads over WebSocket vs.
-  WebRTC-to-server (aiortc). Decide after prototyping both against Whisper API.
+Remaining unresolved items. Resolved decisions have moved into the relevant
+feature docs.
+
+- **Operator audio transport**: chunked MediaRecorder uploads over WebSocket
+  vs. WebRTC-to-server (aiortc). Prototype both against the Whisper API before
+  committing; Whisper's HTTP API is request/response per chunk, so the WebRTC
+  path must justify its complexity with measurable latency or reliability
+  wins.
+- **Samoan/Tagalog translation quality**: shipping with Google Cloud
+  Translation and in-product thumbs-down feedback. Revisit after field data
+  shows whether quality is acceptable.

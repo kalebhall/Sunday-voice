@@ -22,7 +22,8 @@ If session is not started yet, show a waiting state.
 - Live mode:
   - Text auto-scrolls as new segments arrive.
 - Scrollback:
-  - Listener can scroll back in the current session’s history.
+  - Listener can scroll back through the full current-session history
+    (unbounded within the session).
 - Presentation mode:
   - Large text version, typically used on TV or projector (opened by operator).
 
@@ -31,7 +32,29 @@ If session is not started yet, show a waiting state.
 - Listener can toggle TTS on/off per device.
 - When enabled:
   - Short audio clips play as segments arrive.
+  - Playback is sequential (FIFO) per listener.
+  - If the queue falls behind live, segments older than ~10 seconds are
+    skipped so playback catches up to current speech rather than drifting.
 - Operator does not control individual listener audio.
+
+## Translation Quality Feedback
+
+- Listeners (and operator) can flag a segment's translation as bad (thumbs
+  down) directly in the UI.
+- Feedback is stored as anonymized metadata (session id, target language,
+  segment id, timestamp) and survives the 48-hour content purge so admins can
+  review quality trends, especially for Samoan and Tagalog.
+
+## Supported Browsers
+
+Listener UI targets modern evergreen browsers:
+
+- iOS Safari 15+
+- Chrome / Chromium / Edge 108+
+- Firefox 110+
+- Android Chrome 108+
+
+Older browsers may work but are not tested or supported.
 
 ## End of Session
 

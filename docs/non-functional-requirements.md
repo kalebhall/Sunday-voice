@@ -59,7 +59,7 @@
   - Provider integration.
   - Cleanup and scheduler.
 - Documented configuration (e.g., `.env` or YAML).
-- Docker Compose-based deployment.
+- Native systemd deployment on Ubuntu LXC (no containers).
 
 ## Availability
 

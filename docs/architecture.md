@@ -79,4 +79,5 @@ Sunday Voice consists of:
 - WebSockets: via FastAPI / Starlette.
 - Database: PostgreSQL.
 - Cache/queue: Redis (optional in single-process but plan for it).
-- Deployment: Docker Compose on Ubuntu LXC.
+- Deployment: native systemd services on Ubuntu LXC (no containers); PostgreSQL,
+  Redis, and reverse proxy installed via apt. See `deployment.md`.

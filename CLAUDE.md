@@ -37,9 +37,11 @@ Read the relevant doc before making decisions:
 
 ## Stack (decided)
 
-- Backend: Python + FastAPI (async), PostgreSQL, Redis, Docker Compose.
+- Backend: Python + FastAPI (async), PostgreSQL, Redis.
 - Frontend: React + Vite + TypeScript, served as static assets by FastAPI.
-- Reverse proxy: Nginx or Caddy for TLS.
+- Deployment: native systemd services on Ubuntu LXC (no Docker). Postgres,
+  Redis, and reverse proxy installed via apt.
+- Reverse proxy: Caddy or Nginx for TLS.
 - Transcription: OpenAI Whisper API (MVP); browser Web Speech API as fallback.
 - Translation: Google Cloud Translation API v3 (MVP).
 - TTS: Google Cloud Text-to-Speech (MVP).
@@ -61,7 +63,7 @@ Read the relevant doc before making decisions:
 
 ## Open decisions
 
-See `docs/open-questions.md`. The largest open implementation decision is
+See `docs/open-questions.md`. The only remaining implementation decision is
 operator audio transport (chunked WebSocket uploads vs. WebRTC-to-server) —
 prototype both before committing.
 
