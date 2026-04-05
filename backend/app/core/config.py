@@ -40,6 +40,8 @@ class Settings(BaseSettings):
 
     # Retention
     content_retention_hours: int = 48
+    retention_cleanup_interval_minutes: int = 15
+    retention_cleanup_enabled: bool = True
 
     # Providers
     openai_api_key: str = ""

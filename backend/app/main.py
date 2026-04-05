@@ -12,15 +12,41 @@ from app.api import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import RequestIDMiddleware
+from app.db.session import get_sessionmaker
+from app.services.retention import run_retention_cleanup
+from app.services.scheduler import PeriodicTask, Scheduler
 from app.ws import ws_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application startup and shutdown hooks."""
-    # Startup: initialize DB engine, Redis connection pools, etc. (wired in later PRs)
-    yield
-    # Shutdown: dispose engines, close Redis connections.
+    settings = get_settings()
+    scheduler = Scheduler()
+
+    if settings.retention_cleanup_enabled:
+        sessionmaker = get_sessionmaker()
+        retention_hours = settings.content_retention_hours
+        interval_seconds = settings.retention_cleanup_interval_minutes * 60
+
+        async def _retention_job() -> None:
+            await run_retention_cleanup(sessionmaker, retention_hours)
+
+        scheduler.add(
+            PeriodicTask(
+                name="retention-cleanup",
+                job=_retention_job,
+                interval_seconds=interval_seconds,
+                initial_delay_seconds=min(30.0, interval_seconds),
+            )
+        )
+
+    scheduler.start()
+    app.state.scheduler = scheduler
+    try:
+        yield
+    finally:
+        await scheduler.stop()
 
 
 def create_app() -> FastAPI:
