@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     )
 
     # Application
+    app_base_url: str = "http://localhost:8000"
     app_env: str = "development"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
