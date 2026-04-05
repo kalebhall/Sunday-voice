@@ -1,0 +1,63 @@
+"""Application configuration loaded from environment variables."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Typed application settings.
+
+    Values are loaded from environment variables (and an optional .env file).
+    See .env.example for the full list of knobs.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Application
+    app_env: str = "development"
+    app_host: str = "0.0.0.0"
+    app_port: int = 8000
+    app_log_level: str = "info"
+    app_cors_origins: str = "http://localhost:5173"
+
+    # Security
+    secret_key: str = Field(default="change-me", min_length=8)
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_ttl_minutes: int = 60
+
+    # Database / Redis
+    database_url: str = "postgresql+asyncpg://sundayvoice:sundayvoice@localhost:5432/sundayvoice"
+    redis_url: str = "redis://localhost:6379/0"
+
+    # Retention
+    content_retention_hours: int = 48
+
+    # Providers
+    openai_api_key: str = ""
+    whisper_model: str = "whisper-1"
+    google_application_credentials: str = ""
+    google_cloud_project: str = ""
+    google_translate_location: str = "global"
+    tts_enabled: bool = True
+
+    # Cost controls
+    monthly_budget_usd: float = 50.0
+    budget_alert_threshold: float = 0.8
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.app_cors_origins.split(",") if o.strip()]
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()
