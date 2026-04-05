@@ -8,3 +8,5 @@
 - Best translation provider for Samoan quality.
 - How much pre-configuration vs ad hoc creation operators prefer for sessions.
 - Whether admins want export of anonymized usage stats.
+- Operator audio transport: chunked MediaRecorder uploads over WebSocket vs.
+  WebRTC-to-server (aiortc). Decide after prototyping both against Whisper API.

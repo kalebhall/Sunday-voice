@@ -9,10 +9,13 @@ Sunday Voice consists of:
    - Exposes REST APIs for session management and settings.  
    - Provides WebSocket endpoints for live text fan-out.
 
-2. **Media pipeline (transcription service)**  
-   - Receives audio from operator browser (WebRTC/web audio to server).  
-   - Buffers audio briefly.  
-   - Streams audio to Whisper API for transcription.  
+2. **Media pipeline (transcription service)**
+   - Receives audio from operator browser. Transport mechanism is not finalized —
+     candidates are chunked uploads over WebSocket (MediaRecorder WebM/Opus) and
+     WebRTC-to-server via aiortc. Both will be prototyped before committing.
+   - Buffers audio briefly.
+   - Sends audio windows to the Whisper API for transcription (note: the Whisper
+     HTTP API is request/response per chunk, not true bidirectional streaming).
    - Normalizes transcript segments and sends them to the translation layer.
 
 3. **Translation service**  
@@ -72,7 +75,7 @@ Sunday Voice consists of:
 ## Technology Choices (Recommended)
 
 - Backend: Python, FastAPI, asyncio.
-- Frontend: Simple React or vanilla JS with minimal dependencies.
+- Frontend: React + Vite + TypeScript (served as static assets by FastAPI in production).
 - WebSockets: via FastAPI / Starlette.
 - Database: PostgreSQL.
 - Cache/queue: Redis (optional in single-process but plan for it).

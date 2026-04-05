@@ -17,7 +17,10 @@
 
 ## Translation
 
-- MVP: Single cloud provider (e.g., Google Translate), configurable.
+- **MVP default**: Google Cloud Translation API (v3).
+  - Pros: broadest coverage including Samoan and Tagalog; single vendor billing
+    alongside TTS; predictable latency; mature client libraries.
+  - Cons: text leaves your server; per-character cost.
 - Interface allows:
   - Multiple providers.
   - Fallback order.
@@ -27,9 +30,11 @@
 
 ## TTS
 
-- MVP:
-  - Start with one provider that covers needed languages.
-  - Per-listener, opt-in.
+- **MVP default**: Google Cloud Text-to-Speech.
+  - Pros: covers all four target languages; same vendor as translation; decent
+    voice quality; supports SSML and MP3/OGG output.
+  - Cons: per-character cost; cloud dependency.
+- Per-listener, opt-in.
 - Future:
   - Local TTS engines.
   - Caching of repeated phrases.
