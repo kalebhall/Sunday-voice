@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import RequestIDMiddleware
 from app.db.session import get_sessionmaker
+from app.services.listener_connections import listener_connections
 from app.services.retention import run_retention_cleanup
 from app.services.scheduler import PeriodicTask, Scheduler
 from app.ws import ws_router
@@ -40,6 +41,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 initial_delay_seconds=min(30.0, interval_seconds),
             )
         )
+
+    # Apply listener connection cap from settings.
+    listener_connections._max_per_ip = settings.listener_max_connections_per_ip
 
     scheduler.start()
     app.state.scheduler = scheduler

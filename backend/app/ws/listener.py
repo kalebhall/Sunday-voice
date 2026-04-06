@@ -1,0 +1,333 @@
+"""WebSocket endpoint: anonymous listener fan-out.
+
+``/ws/listen/{session_code}/{lang}?after_seq=N``
+
+Streams translated segments to anonymous listeners.  On connect the server
+sends a scrollback of the last N segments (configurable), then streams new
+segments in real-time via Redis pub/sub.  A periodic heartbeat keeps the
+connection alive through proxies and load balancers.
+
+Invariants enforced:
+
+* **Anonymous / read-only** — no authentication required.  The listener
+  receives data but never sends meaningful frames; any text frame from the
+  client is silently ignored.
+* **Session scoped** — the session is looked up by join_code *or* join_slug
+  and must be in ACTIVE status.
+* **Per-IP connection cap** — a single IP address may not exceed
+  ``LISTENER_MAX_CONNECTIONS_PER_IP`` concurrent WebSocket connections.
+* **Reconnect-friendly** — every segment carries a monotonically increasing
+  ``seq`` (the TranslationSegment's source transcript sequence number).
+  Clients may pass ``?after_seq=N`` to skip scrollback segments they already
+  have, enabling seamless reconnection without duplicates.
+* **Heartbeat** — a JSON ``{"type": "heartbeat"}`` message is sent every
+  ``LISTENER_HEARTBEAT_SECONDS`` to keep the connection alive.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from uuid import UUID
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from redis.asyncio import Redis
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+from app.core.config import get_settings
+from app.db.session import get_sessionmaker
+from app.models.segment import TranslationSegment
+from app.models.session import Session, SessionLanguage, SessionStatus
+from app.services.listener_connections import listener_connections
+
+logger = logging.getLogger(__name__)
+
+listener_router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _lookup_active_session(
+    session_code: str,
+) -> tuple[UUID, str] | None:
+    """Resolve *session_code* (join_code or join_slug) to (session_id, source_language).
+
+    Returns ``None`` if the session does not exist or is not ACTIVE.
+    """
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as db:
+        stmt = (
+            select(Session)
+            .options(selectinload(Session.languages))
+            .where(
+                (Session.join_code == session_code) | (Session.join_slug == session_code)
+            )
+        )
+        session = (await db.execute(stmt)).scalar_one_or_none()
+        if session is None or session.status != SessionStatus.ACTIVE:
+            return None
+
+        # Validate that the requested language is enabled for this session.
+        return session.id, session.source_language
+
+
+async def _validate_language(session_code: str, lang: str) -> bool:
+    """Check that *lang* is an enabled target language (or source) for the session."""
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as db:
+        stmt = select(Session).options(selectinload(Session.languages)).where(
+            (Session.join_code == session_code) | (Session.join_slug == session_code)
+        )
+        session = (await db.execute(stmt)).scalar_one_or_none()
+        if session is None:
+            return False
+        enabled = {sl.language_code for sl in session.languages}
+        enabled.add(session.source_language)
+        return lang in enabled
+
+
+async def _fetch_scrollback(
+    session_id: UUID,
+    lang: str,
+    limit: int,
+    after_seq: int,
+) -> list[dict]:
+    """Load the most recent translated segments from the database.
+
+    Returns up to *limit* segments whose source transcript sequence is
+    greater than *after_seq*, ordered oldest-first so the client can
+    append them in order.
+    """
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as db:
+        stmt = (
+            select(TranslationSegment)
+            .where(
+                TranslationSegment.session_id == session_id,
+                TranslationSegment.language_code == lang,
+            )
+            .join(
+                TranslationSegment.transcript_segment,
+            )
+        )
+
+        # Import here to avoid circular — only needed for the join filter.
+        from app.models.segment import TranscriptSegment
+
+        if after_seq > 0:
+            stmt = stmt.where(TranscriptSegment.sequence > after_seq)
+
+        stmt = (
+            stmt.order_by(TranscriptSegment.sequence.desc())
+            .limit(limit)
+        )
+
+        rows = (await db.execute(stmt)).scalars().all()
+
+    # Reverse so oldest is first.
+    segments = []
+    for row in reversed(list(rows)):
+        segments.append(
+            {
+                "type": "segment",
+                "seq": row.transcript_segment.sequence,
+                "language": row.language_code,
+                "text": row.text,
+                "source_language": row.transcript_segment.language,
+            }
+        )
+    return segments
+
+
+def _client_ip(websocket: WebSocket) -> str:
+    """Extract client IP, respecting X-Forwarded-For from a trusted reverse proxy."""
+    forwarded = websocket.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if websocket.client:
+        return websocket.client.host
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# WebSocket endpoint
+# ---------------------------------------------------------------------------
+
+
+@listener_router.websocket("/listen/{session_code}/{lang}")
+async def listener_ws(
+    websocket: WebSocket,
+    session_code: str,
+    lang: str,
+) -> None:
+    """Anonymous listener subscribes to translated segments for a session + language.
+
+    Query params
+    ------------
+    after_seq : int, optional
+        If provided, scrollback will only include segments with sequence > after_seq.
+        Useful for reconnection — the client tells the server what it already has.
+    """
+    settings = get_settings()
+
+    # --- Per-IP connection cap -----------------------------------------------
+    ip = _client_ip(websocket)
+
+    async with listener_connections.track(ip) as allowed:
+        if not allowed:
+            await websocket.close(
+                code=4429, reason="too many connections from this IP"
+            )
+            logger.warning(
+                "listener connection rejected: IP %s exceeded cap (%d)",
+                ip,
+                listener_connections.max_per_ip,
+            )
+            return
+
+        # --- Session + language validation -----------------------------------
+        result = await _lookup_active_session(session_code)
+        if result is None:
+            await websocket.close(
+                code=4404, reason="session not found or not active"
+            )
+            return
+
+        session_id, source_language = result
+
+        if not await _validate_language(session_code, lang):
+            await websocket.close(
+                code=4400, reason="language not enabled for this session"
+            )
+            return
+
+        # --- Accept ----------------------------------------------------------
+        await websocket.accept()
+        logger.info(
+            "listener connected: session=%s lang=%s ip=%s",
+            session_id, lang, ip,
+        )
+
+        # Parse reconnect cursor from query params.
+        after_seq = 0
+        raw = websocket.query_params.get("after_seq")
+        if raw is not None:
+            try:
+                after_seq = max(0, int(raw))
+            except (ValueError, TypeError):
+                pass
+
+        # --- Scrollback ------------------------------------------------------
+        scrollback_limit = getattr(settings, "listener_scrollback_limit", 50)
+        scrollback = await _fetch_scrollback(session_id, lang, scrollback_limit, after_seq)
+
+        # Send scrollback batch as a single message so the client knows when
+        # it transitions from historical to live data.
+        await websocket.send_json(
+            {
+                "type": "scrollback",
+                "segments": scrollback,
+                "count": len(scrollback),
+            }
+        )
+
+        # Track the highest sequence seen so we can deduplicate live segments
+        # that overlap with scrollback.
+        last_seq = after_seq
+        if scrollback:
+            last_seq = max(last_seq, scrollback[-1]["seq"])
+
+        # --- Redis pub/sub subscription --------------------------------------
+        redis_url = settings.redis_url
+        redis = Redis.from_url(redis_url, decode_responses=True)
+        channel = f"session:{session_id}:lang:{lang}"
+        pubsub = redis.pubsub()
+
+        try:
+            await pubsub.subscribe(channel)
+
+            heartbeat_interval = getattr(settings, "listener_heartbeat_seconds", 15)
+            recv_task: asyncio.Task[None] | None = None
+
+            async def _drain_client() -> None:
+                """Read and discard any client frames (read-only endpoint)."""
+                try:
+                    while True:
+                        await websocket.receive_text()
+                except WebSocketDisconnect:
+                    raise
+                except Exception:
+                    pass
+
+            recv_task = asyncio.create_task(
+                _drain_client(), name=f"listener-drain-{session_id}-{lang}"
+            )
+
+            while True:
+                try:
+                    msg = await asyncio.wait_for(
+                        pubsub.get_message(
+                            ignore_subscribe_messages=True, timeout=1.0
+                        ),
+                        timeout=heartbeat_interval,
+                    )
+                except asyncio.TimeoutError:
+                    msg = None
+
+                # Check if the client disconnected.
+                if recv_task.done():
+                    break
+
+                if msg is not None and msg["type"] == "message":
+                    try:
+                        payload = json.loads(msg["data"])
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+
+                    seq = payload.get("sequence", 0)
+                    if seq <= last_seq:
+                        # Already sent in scrollback — deduplicate.
+                        continue
+                    last_seq = seq
+
+                    await websocket.send_json(
+                        {
+                            "type": "segment",
+                            "seq": seq,
+                            "language": payload.get("language", lang),
+                            "text": payload.get("text", ""),
+                            "source_language": payload.get("source_language", ""),
+                        }
+                    )
+                else:
+                    # No message within heartbeat window — send keepalive.
+                    await websocket.send_json({"type": "heartbeat"})
+
+        except WebSocketDisconnect:
+            logger.info(
+                "listener disconnected: session=%s lang=%s ip=%s",
+                session_id, lang, ip,
+            )
+        except Exception:
+            logger.exception(
+                "listener error: session=%s lang=%s ip=%s",
+                session_id, lang, ip,
+            )
+        finally:
+            if recv_task is not None and not recv_task.done():
+                recv_task.cancel()
+                try:
+                    await recv_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()
+            await redis.aclose()
+            logger.info(
+                "listener cleanup complete: session=%s lang=%s ip=%s",
+                session_id, lang, ip,
+            )

@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     google_translate_location: str = "global"
     tts_enabled: bool = True
 
+    # Listener WebSocket
+    listener_scrollback_limit: int = 50
+    listener_heartbeat_seconds: float = 15.0
+    listener_max_connections_per_ip: int = 10
+
     # Cost controls
     monthly_budget_usd: float = 50.0
     budget_alert_threshold: float = 0.8
