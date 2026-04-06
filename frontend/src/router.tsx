@@ -2,6 +2,8 @@ import { createBrowserRouter, Navigate, Outlet } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
+import SessionFormPage from "./pages/SessionFormPage";
+import ConsolePage from "./pages/ConsolePage";
 
 /** Redirect to /login when not authenticated. */
 function RequireAuth() {
@@ -26,7 +28,12 @@ const router = createBrowserRouter([
   },
   {
     element: <RequireAuth />,
-    children: [{ path: "/", element: <DashboardPage /> }],
+    children: [
+      { path: "/", element: <DashboardPage /> },
+      { path: "/sessions/new", element: <SessionFormPage /> },
+      { path: "/sessions/:id/edit", element: <SessionFormPage /> },
+      { path: "/sessions/:id/console", element: <ConsolePage /> },
+    ],
   },
 ]);
 
