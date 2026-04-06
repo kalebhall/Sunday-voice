@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     google_cloud_project: str = ""
     google_translate_location: str = "global"
     tts_enabled: bool = True
+    tts_audio_encoding: str = "MP3"
+    tts_voice_overrides: str = ""  # comma-separated "lang=voice" pairs, e.g. "es=es-US-Wavenet-B"
+    tts_cache_dir: str = "/tmp/sunday-voice-tts-cache"
 
     # Listener WebSocket
     listener_scrollback_limit: int = 50

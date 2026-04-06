@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -21,6 +22,9 @@ from app.models.segment import TranscriptSegment, TranslationSegment
 from app.models.session import SessionLanguage
 from app.providers.base import CostMeter, TranslationProvider
 from app.services.pubsub import TranscriptEvent, transcript_pubsub
+
+if TYPE_CHECKING:
+    from app.services.tts import TTSService
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +48,13 @@ class TranslationFanout:
         db_sessionmaker: async_sessionmaker[AsyncSession],
         redis: Redis,  # type: ignore[type-arg]
         cost_meter: CostMeter | None = None,
+        tts_service: TTSService | None = None,
     ) -> None:
         self._provider = translation_provider
         self._db_sessionmaker = db_sessionmaker
         self._redis = redis
         self._cost_meter = cost_meter
+        self._tts_service = tts_service
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
 
     async def start(self, session_id: UUID) -> None:
@@ -148,7 +154,7 @@ class TranslationFanout:
         target_language: str,
         transcript_segment_id: int | None,
     ) -> None:
-        """Translate, persist, and publish a single language."""
+        """Translate, persist, optionally synthesize TTS, and publish."""
         translated_text = await self._provider.translate(
             text=event.text,
             source_language=event.language,
@@ -156,32 +162,53 @@ class TranslationFanout:
         )
 
         # Persist TranslationSegment.
+        translation_segment_id: int | None = None
         if transcript_segment_id is not None:
-            await self._persist_translation(
+            translation_segment_id = await self._persist_translation(
                 session_id=event.session_id,
                 transcript_segment_id=transcript_segment_id,
                 language_code=target_language,
                 text=translated_text,
             )
 
+        # Synthesize TTS in the background (non-blocking for publish).
+        tts_url: str | None = None
+        if self._tts_service and translation_segment_id is not None:
+            tts_enabled = await self._is_tts_enabled(event.session_id, target_language)
+            if tts_enabled:
+                try:
+                    await self._tts_service.synthesize_for_segment(
+                        translation_segment_id=translation_segment_id,
+                        text=translated_text,
+                        language=target_language,
+                    )
+                    tts_url = f"/api/tts/{translation_segment_id}"
+                except Exception:
+                    logger.exception(
+                        "TTS synthesis failed for segment %d lang=%s",
+                        translation_segment_id,
+                        target_language,
+                    )
+
         # Publish to Redis pub/sub.
         channel = f"session:{event.session_id}:lang:{target_language}"
-        payload = json.dumps(
-            {
-                "session_id": str(event.session_id),
-                "sequence": event.sequence,
-                "language": target_language,
-                "text": translated_text,
-                "source_language": event.language,
-            }
-        )
-        await self._redis.publish(channel, payload)
+        msg: dict = {
+            "session_id": str(event.session_id),
+            "sequence": event.sequence,
+            "language": target_language,
+            "text": translated_text,
+            "source_language": event.language,
+        }
+        if tts_url:
+            msg["tts_url"] = tts_url
+        await self._redis.publish(channel, json.dumps(msg))
 
         logger.debug(
-            "published translation seq=%d lang=%s session=%s",
+            "published translation seq=%d lang=%s session=%s tts=%s",
             event.sequence,
             target_language,
             event.session_id,
+            bool(tts_url),
         )
 
     async def _get_target_languages(self, session_id: UUID) -> list[str]:
@@ -207,6 +234,18 @@ class TranslationFanout:
             )
             return result.scalar_one_or_none()
 
+    async def _is_tts_enabled(self, session_id: UUID, language_code: str) -> bool:
+        """Check if TTS is enabled for a language in a session."""
+        async with self._db_sessionmaker() as db:
+            result = await db.execute(
+                select(SessionLanguage.tts_enabled).where(
+                    SessionLanguage.session_id == session_id,
+                    SessionLanguage.language_code == language_code,
+                )
+            )
+            val = result.scalar_one_or_none()
+            return bool(val)
+
     async def _persist_translation(
         self,
         *,
@@ -214,8 +253,8 @@ class TranslationFanout:
         transcript_segment_id: int,
         language_code: str,
         text: str,
-    ) -> None:
-        """Insert a TranslationSegment row."""
+    ) -> int:
+        """Insert a TranslationSegment row. Returns the new segment ID."""
         async with self._db_sessionmaker() as db:
             segment = TranslationSegment(
                 session_id=session_id,
@@ -226,3 +265,5 @@ class TranslationFanout:
             )
             db.add(segment)
             await db.commit()
+            await db.refresh(segment)
+            return segment.id

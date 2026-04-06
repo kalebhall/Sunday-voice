@@ -16,6 +16,7 @@ from app.db.session import get_sessionmaker
 from app.services.listener_connections import listener_connections
 from app.services.retention import run_retention_cleanup
 from app.services.scheduler import PeriodicTask, Scheduler
+from app.services.tts import TTSCache, TTSService
 from app.ws import ws_router
 
 
@@ -24,9 +25,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application startup and shutdown hooks."""
     settings = get_settings()
     scheduler = Scheduler()
+    sessionmaker = get_sessionmaker()
 
     if settings.retention_cleanup_enabled:
-        sessionmaker = get_sessionmaker()
         retention_hours = settings.content_retention_hours
         interval_seconds = settings.retention_cleanup_interval_minutes * 60
 
@@ -39,6 +40,52 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 job=_retention_job,
                 interval_seconds=interval_seconds,
                 initial_delay_seconds=min(30.0, interval_seconds),
+            )
+        )
+
+    # TTS service (optional — only when tts_enabled is True).
+    if settings.tts_enabled:
+        from app.providers.google_tts import GoogleTTSProvider
+
+        voice_overrides: dict[str, str] = {}
+        if settings.tts_voice_overrides:
+            for pair in settings.tts_voice_overrides.split(","):
+                pair = pair.strip()
+                if "=" in pair:
+                    lang, voice = pair.split("=", 1)
+                    voice_overrides[lang.strip()] = voice.strip()
+
+        tts_provider = GoogleTTSProvider(
+            audio_encoding=settings.tts_audio_encoding,
+            voice_overrides=voice_overrides or None,
+        )
+        tts_cache = TTSCache(
+            cache_dir=settings.tts_cache_dir,
+            ttl_seconds=settings.content_retention_hours * 3600,
+            audio_encoding=settings.tts_audio_encoding,
+        )
+        tts_service = TTSService(
+            provider=tts_provider,
+            cache=tts_cache,
+            db_sessionmaker=sessionmaker,
+        )
+        app.state.tts_service = tts_service
+
+        # Periodic cache eviction aligned with retention.
+        import logging as _logging
+        _tts_logger = _logging.getLogger(__name__)
+
+        async def _tts_evict_job() -> None:
+            removed = tts_service.evict_expired()
+            if removed:
+                _tts_logger.info("tts cache eviction removed %d entries", removed)
+
+        scheduler.add(
+            PeriodicTask(
+                name="tts-cache-eviction",
+                job=_tts_evict_job,
+                interval_seconds=settings.retention_cleanup_interval_minutes * 60,
+                initial_delay_seconds=min(60.0, settings.retention_cleanup_interval_minutes * 60),
             )
         )
 
