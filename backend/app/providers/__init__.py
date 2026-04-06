@@ -6,10 +6,13 @@ from app.providers.base import (
     TranslationProvider,
     TTSProvider,
 )
+from app.providers.whisper import WhisperAPIProvider, WhisperTranscriptionError
 
 __all__ = [
     "CostMeter",
     "TranscriptionProvider",
     "TranslationProvider",
     "TTSProvider",
+    "WhisperAPIProvider",
+    "WhisperTranscriptionError",
 ]
