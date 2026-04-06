@@ -22,7 +22,6 @@ from app.models.session import AudioTransport
 from app.services.pubsub import TranscriptEvent, transcript_pubsub
 from app.ws.operator_audio import reset_operator_locks
 
-
 # -- Helpers ------------------------------------------------------------------
 
 
@@ -204,7 +203,7 @@ class TestOperatorAudioIngest:
             yield "Hello world"
 
         with patch(
-            "app.ws.operator_audio.WhisperAPIProvider"
+            "app.services.audio_ingest.WhisperAPIProvider"
         ) as MockProvider:
             instance = MockProvider.return_value
             instance.transcribe_stream = _fake_transcribe
@@ -248,7 +247,7 @@ class TestSingleOperatorLock:
         sess = await _make_session(db_sessionmaker, user=user)
         token = _token_for(user)
 
-        with patch("app.ws.operator_audio.WhisperAPIProvider"):
+        with patch("app.services.audio_ingest.WhisperAPIProvider"):
             try:
                 with client.websocket_connect(
                     f"/ws/operator/{sess.id}/audio?token={token}"
