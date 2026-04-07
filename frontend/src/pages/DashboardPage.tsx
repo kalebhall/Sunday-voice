@@ -56,6 +56,11 @@ export default function DashboardPage() {
       <header className="op-header">
         <span className="op-brand">Sunday Voice</span>
         <div className="op-header-actions">
+          {user?.role === "admin" && (
+            <Link to="/admin" className="btn btn-ghost btn-sm">
+              Admin
+            </Link>
+          )}
           <span className="op-user-name">{user?.display_name}</span>
           <button
             type="button"

@@ -6,6 +6,7 @@ import SessionFormPage from "./pages/SessionFormPage";
 import ConsolePage from "./pages/ConsolePage";
 import ListenerPage from "./pages/ListenerPage";
 import ProjectionPage from "./pages/ProjectionPage";
+import AdminPage from "./pages/AdminPage";
 
 /** Redirect to /login when not authenticated. */
 function RequireAuth() {
@@ -20,6 +21,15 @@ function GuestOnly() {
   const { user, loading } = useAuth();
   if (loading) return null;
   if (user) return <Navigate to="/" replace />;
+  return <Outlet />;
+}
+
+/** Admin-only guard — non-admins are sent to the dashboard. */
+function RequireAdmin() {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== "admin") return <Navigate to="/" replace />;
   return <Outlet />;
 }
 
@@ -39,6 +49,12 @@ const router = createBrowserRouter([
       { path: "/sessions/new", element: <SessionFormPage /> },
       { path: "/sessions/:id/edit", element: <SessionFormPage /> },
       { path: "/sessions/:id/console", element: <ConsolePage /> },
+    ],
+  },
+  {
+    element: <RequireAdmin />,
+    children: [
+      { path: "/admin", element: <AdminPage /> },
     ],
   },
 ]);
