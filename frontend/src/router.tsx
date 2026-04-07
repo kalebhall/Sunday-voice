@@ -5,6 +5,7 @@ import DashboardPage from "./pages/DashboardPage";
 import SessionFormPage from "./pages/SessionFormPage";
 import ConsolePage from "./pages/ConsolePage";
 import ListenerPage from "./pages/ListenerPage";
+import ProjectionPage from "./pages/ProjectionPage";
 
 /** Redirect to /login when not authenticated. */
 function RequireAuth() {
@@ -23,8 +24,9 @@ function GuestOnly() {
 }
 
 const router = createBrowserRouter([
-  // Public anonymous listener route — no auth required.
+  // Public anonymous listener routes — no auth required.
   { path: "/l/:code", element: <ListenerPage /> },
+  { path: "/l/:code/projection", element: <ProjectionPage /> },
 
   {
     element: <GuestOnly />,
