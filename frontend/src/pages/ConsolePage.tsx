@@ -3,6 +3,14 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import api, { getAccessToken } from "../api/client";
 import type { components } from "../api/schema";
 
+// Web Speech API is not yet in lib.dom.d.ts for all envs; declare minimally.
+declare global {
+  interface Window {
+    SpeechRecognition: typeof SpeechRecognition | undefined;
+    webkitSpeechRecognition: typeof SpeechRecognition | undefined;
+  }
+}
+
 type SessionOut = components["schemas"]["SessionOut"];
 
 interface Segment {
@@ -11,6 +19,14 @@ interface Segment {
 }
 
 type CaptureState = "idle" | "starting" | "active" | "stopping" | "error";
+
+// BCP-47 language tag mapping for Web Speech API
+const SPEECH_LANG_TAG: Record<string, string> = {
+  en: "en-US",
+  es: "es-US",
+  sm: "sm-WS",
+  tl: "fil-PH",
+};
 type WsState = "connecting" | "open" | "closed" | "error";
 
 const LANG_NAMES: Record<string, string> = {
@@ -95,6 +111,7 @@ export default function ConsolePage() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const operatorWsRef = useRef<WebSocket | null>(null);
   const peerConnRef = useRef<RTCPeerConnection | null>(null);
+  const speechRecogRef = useRef<SpeechRecognition | null>(null);
   const listenerWsMap = useRef<Map<string, WebSocket>>(new Map());
   const lastSeqMap = useRef<Map<string, number>>(new Map());
   const panelRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -115,6 +132,7 @@ export default function ConsolePage() {
       operatorWsRef.current?.close();
       peerConnRef.current?.close();
       if (recorderRef.current?.state !== "inactive") recorderRef.current?.stop();
+      speechRecogRef.current?.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -311,6 +329,86 @@ export default function ConsolePage() {
     };
   }
 
+  // ----- Web Speech API capture -----
+  function startWebSpeechCapture(sessionId: string, sourceLanguage: string) {
+    const SpeechRecognitionCtor =
+      window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) {
+      throw new Error(
+        "Browser does not support the Web Speech API. Use Chrome or Edge.",
+      );
+    }
+
+    const token = getAccessToken();
+    if (!token) throw new Error("Not authenticated");
+
+    const wsUrl = `${wsBaseUrl()}/ws/operator/${sessionId}/transcript?token=${encodeURIComponent(token)}`;
+    const ws = new WebSocket(wsUrl);
+    operatorWsRef.current = ws;
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = SPEECH_LANG_TAG[sourceLanguage] ?? sourceLanguage;
+    speechRecogRef.current = recognition;
+
+    ws.onopen = () => {
+      if (!mountedRef.current) { ws.close(); return; }
+      recognition.start();
+    };
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (!result.isFinal) continue;
+        const text = result[0].transcript.trim();
+        if (text) {
+          ws.send(JSON.stringify({ text, language: sourceLanguage }));
+        }
+      }
+    };
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      // "no-speech" and "audio-capture" are transient; log but don't abort.
+      if (event.error === "no-speech" || event.error === "audio-capture") {
+        return;
+      }
+      if (!mountedRef.current) return;
+      setCaptureError(`Speech recognition error: ${event.error}`);
+      setCaptureState("error");
+      captureActiveRef.current = false;
+    };
+
+    recognition.onend = () => {
+      // Auto-restart recognition while the capture is still active.
+      if (captureActiveRef.current && mountedRef.current) {
+        try {
+          recognition.start();
+        } catch {
+          // Ignore if already started.
+        }
+      }
+    };
+
+    ws.onerror = () => {
+      if (!mountedRef.current) return;
+      setCaptureError("Transcript WebSocket connection error");
+      setCaptureState("error");
+      captureActiveRef.current = false;
+    };
+
+    ws.onclose = (ev) => {
+      recognition.stop();
+      if (!mountedRef.current) return;
+      if (captureActiveRef.current && !ev.wasClean) {
+        setCaptureError("Transcript connection lost — click Retry to reconnect");
+        setCaptureState("error");
+        captureActiveRef.current = false;
+      }
+    };
+  }
+
   // ----- Start capture -----
   async function startCapture() {
     if (!session || !id) return;
@@ -330,24 +428,29 @@ export default function ConsolePage() {
         setSession(data);
       }
 
-      // Get mic stream
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: deviceId ? { deviceId: { exact: deviceId } } : true,
-        video: false,
-      });
-      streamRef.current = stream;
-
-      // Re-enumerate after permission grant (labels become available)
-      const devs = await navigator.mediaDevices.enumerateDevices();
-      const inputs = devs.filter((d) => d.kind === "audioinput");
-      if (mountedRef.current) setDevices(inputs);
-
-      setupAudioMeter(stream);
-
-      if (activeSession.audio_transport === "webrtc") {
-        await startWebRTCCapture(stream, id);
+      if (activeSession.audio_transport === "web_speech") {
+        // Web Speech API manages the mic internally; skip getUserMedia.
+        startWebSpeechCapture(id, activeSession.source_language);
       } else {
-        startWsChunksCapture(stream, id);
+        // Get mic stream for audio-based transports.
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+          video: false,
+        });
+        streamRef.current = stream;
+
+        // Re-enumerate after permission grant (labels become available)
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        const inputs = devs.filter((d) => d.kind === "audioinput");
+        if (mountedRef.current) setDevices(inputs);
+
+        setupAudioMeter(stream);
+
+        if (activeSession.audio_transport === "webrtc") {
+          await startWebRTCCapture(stream, id);
+        } else {
+          startWsChunksCapture(stream, id);
+        }
       }
 
       captureActiveRef.current = true;
@@ -361,6 +464,8 @@ export default function ConsolePage() {
       operatorWsRef.current = null;
       peerConnRef.current?.close();
       peerConnRef.current = null;
+      speechRecogRef.current?.stop();
+      speechRecogRef.current = null;
       await teardownAudio();
       if (mountedRef.current) {
         setCaptureError(
@@ -384,6 +489,9 @@ export default function ConsolePage() {
 
     peerConnRef.current?.close();
     peerConnRef.current = null;
+
+    speechRecogRef.current?.stop();
+    speechRecogRef.current = null;
 
     await teardownAudio();
 
@@ -643,7 +751,9 @@ export default function ConsolePage() {
             Transport:{" "}
             {session.audio_transport === "webrtc"
               ? "WebRTC"
-              : "WebSocket chunks"}{" "}
+              : session.audio_transport === "web_speech"
+                ? "Browser (Web Speech API)"
+                : "WebSocket chunks"}{" "}
             · Source: {langLabel(session.source_language)}
             {session.target_languages.length > 0 &&
               ` · Translations: ${session.target_languages.map((l) => langLabel(l.language_code)).join(", ")}`}

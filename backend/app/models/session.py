@@ -28,6 +28,7 @@ class SessionStatus(enum.StrEnum):
 class AudioTransport(enum.StrEnum):
     WEBSOCKET_CHUNKS = "websocket_chunks"
     WEBRTC = "webrtc"
+    WEB_SPEECH = "web_speech"
 
 
 class Session(TimestampMixin, Base):
