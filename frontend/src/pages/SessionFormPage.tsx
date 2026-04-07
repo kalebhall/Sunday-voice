@@ -250,6 +250,20 @@ export default function SessionFormPage() {
                   <span className="text-muted">(lower latency, requires STUN)</span>
                 </span>
               </label>
+              <label className="radio-option">
+                <input
+                  type="radio"
+                  name="transport"
+                  value="web_speech"
+                  checked={audioTransport === "web_speech"}
+                  onChange={() => setAudioTransport("web_speech")}
+                  disabled={submitting}
+                />
+                <span>
+                  Browser (Web Speech API){" "}
+                  <span className="text-muted">(fallback when Whisper is unavailable; Chrome/Edge only)</span>
+                </span>
+              </label>
             </div>
           </div>
 
