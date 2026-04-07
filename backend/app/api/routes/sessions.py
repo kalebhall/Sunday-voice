@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import secrets
 import string
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from redis.asyncio import Redis
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, require_role
+from app.api.deps import DbSession, client_identifier, get_join_rate_limiter, require_role
 from app.core.config import get_settings
+from app.core.rate_limit import SlidingWindowRateLimiter
 from app.models import AudioTransport, Session, SessionLanguage, SessionStatus, User
 from app.schemas.session import (
     LanguageOut,
@@ -240,7 +245,12 @@ async def stop_session(
     db: DbSession,
     user: OperatorUser,
 ) -> SessionOut:
-    """Transition a session from active to ended."""
+    """Transition a session from active to ended.
+
+    After committing the status change a kill-switch message is published to
+    the session's Redis control channel so all active listener WebSocket
+    connections are immediately closed.
+    """
     session = await _get_operator_session(session_id, db, user)
     if session.status != SessionStatus.ACTIVE:
         raise HTTPException(
@@ -251,6 +261,22 @@ async def stop_session(
     session.ended_at = datetime.now(tz=UTC)
     await db.commit()
     await db.refresh(session, attribute_names=["languages"])
+
+    # Publish kill-switch so listener WebSocket handlers disconnect immediately.
+    settings = get_settings()
+    control_channel = f"session:{session_id}:control"
+    try:
+        redis = Redis.from_url(settings.redis_url, decode_responses=True)
+        await redis.publish(
+            control_channel,
+            json.dumps({"type": "session_ended", "session_id": str(session_id)}),
+        )
+        await redis.aclose()
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "failed to publish kill-switch for session %s", session_id
+        )
+
     return _session_out(session)
 
 
@@ -260,12 +286,27 @@ async def stop_session(
 
 
 @router.get("/join/{code}", response_model=ListenerSessionOut)
-async def join_session(code: str, db: DbSession) -> ListenerSessionOut:
+async def join_session(
+    code: str,
+    request: Request,
+    db: DbSession,
+    limiter: Annotated[SlidingWindowRateLimiter, Depends(get_join_rate_limiter)],
+) -> ListenerSessionOut:
     """Look up a session by join code or join slug. No auth required.
 
     Returns only the information a listener needs -- no write paths, no
     internal IDs beyond the session UUID needed to open a WebSocket.
+    Rate-limited per IP to deter join-code enumeration.
     """
+    ip = client_identifier(request)
+    result = limiter.check(f"join:{ip}")
+    if not result.allowed:
+        retry_after = max(1, int(result.retry_after_seconds) + 1)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many join attempts",
+            headers={"Retry-After": str(retry_after)},
+        )
     stmt = (
         select(Session)
         .options(selectinload(Session.languages))

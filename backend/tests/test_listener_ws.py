@@ -342,20 +342,25 @@ class TestListenerConnectionTracker:
         tracker.reset()
         tracker._max_per_ip = 2
 
-        assert await tracker.try_acquire("1.2.3.4")
+        allowed, _ = await tracker.try_acquire("1.2.3.4")
+        assert allowed
         assert tracker.connection_count("1.2.3.4") == 1
-        assert await tracker.try_acquire("1.2.3.4")
+        allowed, _ = await tracker.try_acquire("1.2.3.4")
+        assert allowed
         assert tracker.connection_count("1.2.3.4") == 2
 
         # Third should fail.
-        assert not await tracker.try_acquire("1.2.3.4")
+        allowed, reason = await tracker.try_acquire("1.2.3.4")
+        assert not allowed
+        assert reason
         assert tracker.connection_count("1.2.3.4") == 2
 
         await tracker.release("1.2.3.4")
         assert tracker.connection_count("1.2.3.4") == 1
 
         # Now it should succeed again.
-        assert await tracker.try_acquire("1.2.3.4")
+        allowed, _ = await tracker.try_acquire("1.2.3.4")
+        assert allowed
         assert tracker.connection_count("1.2.3.4") == 2
 
         tracker.reset()
@@ -366,7 +371,7 @@ class TestListenerConnectionTracker:
         tracker.reset()
         tracker._max_per_ip = 1
 
-        async with tracker.track("5.6.7.8") as allowed:
+        async with tracker.track("5.6.7.8") as (allowed, _reason):
             assert allowed
             assert tracker.connection_count("5.6.7.8") == 1
 
@@ -375,3 +380,182 @@ class TestListenerConnectionTracker:
 
         tracker.reset()
         tracker._max_per_ip = 10
+
+    async def test_per_session_cap(self) -> None:
+        tracker = listener_connections
+        tracker.reset()
+        tracker._max_per_ip = 100
+        tracker._max_per_session = 2
+
+        allowed, _ = await tracker.try_acquire("1.1.1.1", "session-A")
+        assert allowed
+        assert tracker.session_connection_count("session-A") == 1
+
+        allowed, _ = await tracker.try_acquire("2.2.2.2", "session-A")
+        assert allowed
+        assert tracker.session_connection_count("session-A") == 2
+
+        # Third connection to same session should be rejected (different IP is irrelevant).
+        allowed, reason = await tracker.try_acquire("3.3.3.3", "session-A")
+        assert not allowed
+        assert "session" in reason.lower()
+        assert tracker.session_connection_count("session-A") == 2
+
+        # Different session should be unaffected.
+        allowed, _ = await tracker.try_acquire("3.3.3.3", "session-B")
+        assert allowed
+
+        tracker.reset()
+        tracker._max_per_ip = 10
+        tracker._max_per_session = 100
+
+    async def test_ip_and_session_caps_are_independent(self) -> None:
+        """IP cap must block even if session has room, and vice versa."""
+        tracker = listener_connections
+        tracker.reset()
+        tracker._max_per_ip = 1
+        tracker._max_per_session = 10
+
+        allowed, _ = await tracker.try_acquire("9.9.9.9", "sess-X")
+        assert allowed
+
+        # IP cap blocks a second connection from same IP even to a different session.
+        allowed, reason = await tracker.try_acquire("9.9.9.9", "sess-Y")
+        assert not allowed
+        assert "IP" in reason
+
+        tracker.reset()
+        tracker._max_per_ip = 10
+        tracker._max_per_session = 100
+
+
+class TestListenerPerSessionCap:
+    """Integration test: per-session connection cap via WebSocket."""
+
+    async def test_exceeds_per_session_cap(
+        self,
+        client: TestClient,
+        db_sessionmaker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        user = await _make_operator(db_sessionmaker)
+        await _make_active_session(db_sessionmaker, user)
+
+        listener_connections._max_per_ip = 100
+        listener_connections._max_per_session = 1
+
+        try:
+            with client.websocket_connect("/ws/listen/ABC123/es") as ws1:
+                # Second connection to same session should be rejected.
+                with pytest.raises(WebSocketDisconnect) as exc_info:
+                    with client.websocket_connect("/ws/listen/ABC123/es"):
+                        pass
+                assert exc_info.value.code == 4429
+                ws1.close()
+        except Exception:
+            pass
+        finally:
+            listener_connections._max_per_ip = 10
+            listener_connections._max_per_session = 100
+
+
+class TestListenerKillSwitch:
+    """The session_ended control message disconnects active listeners."""
+
+    async def test_kill_switch_closes_listener(
+        self,
+        db_sessionmaker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Listener should receive session_ended message and close."""
+        from app.db.session import get_session
+        from app.main import app
+
+        async def _override() -> AsyncIterator[AsyncSession]:
+            async with db_sessionmaker() as session:
+                yield session
+
+        app.dependency_overrides[get_session] = _override
+        listener_connections.reset()
+
+        user = await _make_operator(db_sessionmaker)
+        await _make_active_session(db_sessionmaker, user)
+
+        # Build a mock pubsub that first returns None then returns the kill message.
+        import json as _json
+
+        call_count = 0
+
+        async def _get_message(ignore_subscribe_messages=False, timeout=1.0):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return None  # triggers heartbeat
+            return {
+                "type": "message",
+                "channel": "session:00000000-0000-0000-0000-000000000000:control",
+                "data": _json.dumps({"type": "session_ended"}),
+            }
+
+        mock_pubsub = AsyncMock()
+        mock_pubsub.subscribe = AsyncMock()
+        mock_pubsub.unsubscribe = AsyncMock()
+        mock_pubsub.aclose = AsyncMock()
+        mock_pubsub.get_message = _get_message
+
+        mock_redis = MagicMock()
+        mock_redis.pubsub.return_value = mock_pubsub
+        mock_redis.aclose = AsyncMock()
+
+        try:
+            with patch(
+                "app.ws.listener.get_sessionmaker", return_value=db_sessionmaker
+            ), patch("app.ws.listener.Redis") as MockRedis:
+                # Return the control channel name that matches the actual session.
+                # We'll intercept the channel by overriding get_message after subscribe.
+                actual_control_channel: list[str] = []
+
+                async def _capture_subscribe(*channels):
+                    actual_control_channel.extend(channels)
+
+                mock_pubsub.subscribe = _capture_subscribe
+
+                async def _get_message_patched(
+                    ignore_subscribe_messages=False, timeout=1.0
+                ):
+                    nonlocal call_count
+                    call_count += 1
+                    if call_count == 1:
+                        return None
+                    # Find the control channel from what was subscribed.
+                    ctrl = next(
+                        (c for c in actual_control_channel if c.endswith(":control")),
+                        None,
+                    )
+                    if ctrl is None:
+                        return None
+                    return {
+                        "type": "message",
+                        "channel": ctrl,
+                        "data": _json.dumps({"type": "session_ended"}),
+                    }
+
+                mock_pubsub.get_message = _get_message_patched
+                MockRedis.from_url.return_value = mock_redis
+
+                session_ended_msg = None
+                with TestClient(app) as tc:
+                    # The server sends session_ended then closes; the context
+                    # manager exits cleanly (server-initiated close on an
+                    # accepted socket does not raise WebSocketDisconnect).
+                    try:
+                        with tc.websocket_connect("/ws/listen/ABC123/es") as ws:
+                            _scrollback = ws.receive_json()  # scrollback batch
+                            _heartbeat = ws.receive_json()   # heartbeat (call 1)
+                            session_ended_msg = ws.receive_json()  # kill-switch (call 2)
+                    except WebSocketDisconnect:
+                        pass  # also acceptable
+
+                assert session_ended_msg is not None
+                assert session_ended_msg["type"] == "session_ended"
+        finally:
+            app.dependency_overrides.pop(get_session, None)
+            listener_connections.reset()

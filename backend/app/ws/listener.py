@@ -16,12 +16,17 @@ Invariants enforced:
   and must be in ACTIVE status.
 * **Per-IP connection cap** — a single IP address may not exceed
   ``LISTENER_MAX_CONNECTIONS_PER_IP`` concurrent WebSocket connections.
+* **Per-session connection cap** — a single session may not have more than
+  ``LISTENER_MAX_CONNECTIONS_PER_SESSION`` concurrent listener connections.
 * **Reconnect-friendly** — every segment carries a monotonically increasing
   ``seq`` (the TranslationSegment's source transcript sequence number).
   Clients may pass ``?after_seq=N`` to skip scrollback segments they already
   have, enabling seamless reconnection without duplicates.
 * **Heartbeat** — a JSON ``{"type": "heartbeat"}`` message is sent every
   ``LISTENER_HEARTBEAT_SECONDS`` to keep the connection alive.
+* **Kill-switch** — when an operator ends a session the server publishes a
+  ``{"type": "session_ended"}`` control message that immediately closes all
+  active listener connections for that session.
 """
 
 from __future__ import annotations
@@ -45,6 +50,9 @@ from app.services.listener_connections import listener_connections
 logger = logging.getLogger(__name__)
 
 listener_router = APIRouter()
+
+# Redis channel suffix used for session control messages (kill-switch).
+_CONTROL_SUFFIX = ":control"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,7 +79,6 @@ async def _lookup_active_session(
         if session is None or session.status != SessionStatus.ACTIVE:
             return None
 
-        # Validate that the requested language is enabled for this session.
         return session.id, session.source_language
 
 
@@ -175,35 +182,30 @@ async def listener_ws(
         Useful for reconnection — the client tells the server what it already has.
     """
     settings = get_settings()
-
-    # --- Per-IP connection cap -----------------------------------------------
     ip = _client_ip(websocket)
 
-    async with listener_connections.track(ip) as allowed:
+    # --- Session + language validation (before holding a connection slot) ----
+    result = await _lookup_active_session(session_code)
+    if result is None:
+        await websocket.close(code=4404, reason="session not found or not active")
+        return
+
+    session_id, source_language = result
+
+    if not await _validate_language(session_code, lang):
+        await websocket.close(code=4400, reason="language not enabled for this session")
+        return
+
+    # --- Connection caps (holds slots for duration of connection) ------------
+    session_key = str(session_id)
+    async with listener_connections.track(ip, session_key) as (allowed, reason):
         if not allowed:
-            await websocket.close(
-                code=4429, reason="too many connections from this IP"
-            )
+            await websocket.close(code=4429, reason=reason)
             logger.warning(
-                "listener connection rejected: IP %s exceeded cap (%d)",
+                "listener connection rejected: ip=%s session=%s reason=%r",
                 ip,
-                listener_connections.max_per_ip,
-            )
-            return
-
-        # --- Session + language validation -----------------------------------
-        result = await _lookup_active_session(session_code)
-        if result is None:
-            await websocket.close(
-                code=4404, reason="session not found or not active"
-            )
-            return
-
-        session_id, source_language = result
-
-        if not await _validate_language(session_code, lang):
-            await websocket.close(
-                code=4400, reason="language not enabled for this session"
+                session_id,
+                reason,
             )
             return
 
@@ -227,8 +229,6 @@ async def listener_ws(
         scrollback_limit = getattr(settings, "listener_scrollback_limit", 50)
         scrollback = await _fetch_scrollback(session_id, lang, scrollback_limit, after_seq)
 
-        # Send scrollback batch as a single message so the client knows when
-        # it transitions from historical to live data.
         await websocket.send_json(
             {
                 "type": "scrollback",
@@ -237,8 +237,6 @@ async def listener_ws(
             }
         )
 
-        # Track the highest sequence seen so we can deduplicate live segments
-        # that overlap with scrollback.
         last_seq = after_seq
         if scrollback:
             last_seq = max(last_seq, scrollback[-1]["seq"])
@@ -246,11 +244,12 @@ async def listener_ws(
         # --- Redis pub/sub subscription --------------------------------------
         redis_url = settings.redis_url
         redis = Redis.from_url(redis_url, decode_responses=True)
-        channel = f"session:{session_id}:lang:{lang}"
+        lang_channel = f"session:{session_id}:lang:{lang}"
+        control_channel = f"session:{session_id}{_CONTROL_SUFFIX}"
         pubsub = redis.pubsub()
 
         try:
-            await pubsub.subscribe(channel)
+            await pubsub.subscribe(lang_channel, control_channel)
 
             heartbeat_interval = getattr(settings, "listener_heartbeat_seconds", 15)
             recv_task: asyncio.Task[None] | None = None
@@ -285,6 +284,25 @@ async def listener_ws(
                     break
 
                 if msg is not None and msg["type"] == "message":
+                    # --- Kill-switch: session ended --------------------------
+                    if msg["channel"] == control_channel:
+                        try:
+                            ctrl = json.loads(msg["data"])
+                        except (json.JSONDecodeError, TypeError):
+                            ctrl = {}
+                        if ctrl.get("type") == "session_ended":
+                            logger.info(
+                                "kill-switch received: closing listener session=%s lang=%s ip=%s",
+                                session_id, lang, ip,
+                            )
+                            await websocket.send_json({"type": "session_ended"})
+                            await websocket.close(
+                                code=4410, reason="session ended by operator"
+                            )
+                            break
+                        continue
+
+                    # --- Normal segment message ------------------------------
                     try:
                         payload = json.loads(msg["data"])
                     except (json.JSONDecodeError, TypeError):
@@ -328,7 +346,7 @@ async def listener_ws(
                     await recv_task
                 except (asyncio.CancelledError, Exception):
                     pass
-            await pubsub.unsubscribe(channel)
+            await pubsub.unsubscribe(lang_channel, control_channel)
             await pubsub.aclose()
             await redis.aclose()
             logger.info(

@@ -31,6 +31,7 @@ from app.services.audio_ingest import (
     acquire_operator_lock,
     drain_transcription,
     enqueue_chunk,
+    get_audio_byte_limiter,
     release_operator_lock,
     transcription_task,
     validate_active_session,
@@ -98,11 +99,23 @@ async def operator_audio_ws(websocket: WebSocket, session_id: UUID) -> None:
             name=f"transcribe-{session_id}",
         )
 
+        byte_limiter = await get_audio_byte_limiter()
+
         try:
             while True:
                 data = await websocket.receive_bytes()
                 if not data:
                     continue
+                if not await byte_limiter.record_and_check(session_id, len(data)):
+                    logger.warning(
+                        "operator %d exceeded audio byte cap for session %s; closing",
+                        operator_user_id,
+                        session_id,
+                    )
+                    await websocket.close(
+                        code=4429, reason="audio byte rate limit exceeded"
+                    )
+                    break
                 enqueue_chunk(chunk_queue, data, session_id)
         except WebSocketDisconnect:
             logger.info(

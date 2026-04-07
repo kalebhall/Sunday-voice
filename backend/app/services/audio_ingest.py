@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections import deque
 from collections.abc import AsyncIterator
 from uuid import UUID
 
@@ -28,6 +30,74 @@ CHUNK_QUEUE_MAXSIZE = 30  # ~60-90 s of audio at 2-3 s chunks
 # Per-session lock: maps session_id → True while an operator is connected.
 _active_operators: dict[UUID, bool] = {}
 _active_operators_lock = asyncio.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Operator audio byte rate limiter
+# ---------------------------------------------------------------------------
+
+
+class AudioByteRateLimiter:
+    """Rolling per-minute byte counter, keyed by session UUID.
+
+    Tracks how many bytes an operator has sent in the past 60 seconds.
+    ``record_and_check`` both records the new chunk and returns whether the
+    running total is still within the configured cap.
+    """
+
+    _WINDOW_SECONDS = 60.0
+
+    def __init__(self, max_bytes_per_minute: int) -> None:
+        self._max_bytes = max_bytes_per_minute
+        # Maps session_id → deque of (monotonic_timestamp, byte_count) pairs.
+        self._windows: dict[UUID, deque[tuple[float, int]]] = {}
+        self._lock = asyncio.Lock()
+
+    async def record_and_check(self, session_id: UUID, num_bytes: int) -> bool:
+        """Record *num_bytes* for *session_id*.  Returns True if within cap."""
+        now = time.monotonic()
+        cutoff = now - self._WINDOW_SECONDS
+        async with self._lock:
+            window = self._windows.setdefault(session_id, deque())
+            # Evict entries older than the rolling window.
+            while window and window[0][0] <= cutoff:
+                window.popleft()
+            total = sum(b for _, b in window) + num_bytes
+            if total > self._max_bytes:
+                return False
+            window.append((now, num_bytes))
+            return True
+
+    def reset(self, session_id: UUID | None = None) -> None:
+        """Clear state.  Used in tests."""
+        if session_id is None:
+            self._windows.clear()
+        else:
+            self._windows.pop(session_id, None)
+
+
+# Module-level singleton, initialised lazily from settings.
+_audio_byte_limiter: AudioByteRateLimiter | None = None
+_audio_byte_limiter_lock = asyncio.Lock()
+
+
+async def get_audio_byte_limiter() -> AudioByteRateLimiter:
+    """Return the process-wide audio byte limiter, creating it lazily."""
+    global _audio_byte_limiter
+    if _audio_byte_limiter is None:
+        async with _audio_byte_limiter_lock:
+            if _audio_byte_limiter is None:
+                settings = get_settings()
+                _audio_byte_limiter = AudioByteRateLimiter(
+                    max_bytes_per_minute=settings.operator_audio_max_bytes_per_minute
+                )
+    return _audio_byte_limiter
+
+
+def reset_audio_byte_limiter() -> None:
+    """Discard the cached limiter.  Used in tests."""
+    global _audio_byte_limiter
+    _audio_byte_limiter = None
 
 
 async def acquire_operator_lock(session_id: UUID) -> bool:

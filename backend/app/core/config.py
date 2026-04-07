@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     listener_scrollback_limit: int = 50
     listener_heartbeat_seconds: float = 15.0
     listener_max_connections_per_ip: int = 10
+    listener_max_connections_per_session: int = 100
+
+    # Join endpoint rate limit (anonymous, per IP)
+    join_rate_limit_max_attempts: int = 30
+    join_rate_limit_window_seconds: float = 60.0
+
+    # Operator audio byte cap (rolling per-minute, per session)
+    operator_audio_max_bytes_per_minute: int = 10 * 1024 * 1024  # 10 MB
 
     # Cost controls
     monthly_budget_usd: float = 50.0
