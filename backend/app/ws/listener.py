@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -42,6 +43,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
+from app.core.metrics import connected_listeners, segment_pipeline_duration_seconds
 from app.db.session import get_sessionmaker
 from app.models.segment import TranslationSegment
 from app.models.session import Session, SessionLanguage, SessionStatus
@@ -211,6 +213,7 @@ async def listener_ws(
 
         # --- Accept ----------------------------------------------------------
         await websocket.accept()
+        connected_listeners.inc()
         logger.info(
             "listener connected: session=%s lang=%s ip=%s",
             session_id, lang, ip,
@@ -314,6 +317,16 @@ async def listener_ws(
                         continue
                     last_seq = seq
 
+                    # Observe end-to-end pipeline latency when available.
+                    published_at = payload.get("published_at")
+                    if published_at is not None:
+                        try:
+                            segment_pipeline_duration_seconds.observe(
+                                time.monotonic() - float(published_at)
+                            )
+                        except (TypeError, ValueError):
+                            pass
+
                     await websocket.send_json(
                         {
                             "type": "segment",
@@ -340,6 +353,7 @@ async def listener_ws(
                 session_id, lang, ip,
             )
         finally:
+            connected_listeners.dec()
             if recv_task is not None and not recv_task.done():
                 recv_task.cancel()
                 try:

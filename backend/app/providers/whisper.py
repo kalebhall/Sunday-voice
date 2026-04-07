@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import io
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
 import httpx
+
+from app.core.metrics import (
+    provider_errors_total,
+    segment_transcription_duration_seconds,
+)
 
 if TYPE_CHECKING:
     from app.providers.base import CostMeter
@@ -103,7 +109,16 @@ class WhisperAPIProvider:
 
         files = {"file": ("audio.webm", audio_bytes, "audio/webm")}
 
-        response = await self._post_with_retry(data=data, files=files)
+        t0 = time.monotonic()
+        try:
+            response = await self._post_with_retry(data=data, files=files)
+        except Exception:
+            provider_errors_total.labels(provider="openai", operation="transcribe").inc()
+            raise
+        finally:
+            segment_transcription_duration_seconds.labels(provider="openai").observe(
+                time.monotonic() - t0
+            )
         text = response.text.strip()
 
         if self._cost_meter is not None:

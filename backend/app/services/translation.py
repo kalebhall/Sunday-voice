@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.segment import TranscriptSegment, TranslationSegment
 from app.models.session import SessionLanguage
+from app.core.metrics import provider_errors_total, segment_translation_duration_seconds
 from app.providers.base import CostMeter, TranslationProvider
 from app.services.pubsub import TranscriptEvent, transcript_pubsub
 
@@ -138,7 +140,7 @@ class TranslationFanout:
             return_exceptions=True,
         )
 
-        for lang, result in zip(languages_to_translate, results):
+        for lang, result in zip(languages_to_translate, results, strict=False):
             if isinstance(result, Exception):
                 logger.error(
                     "translation to %s failed for session %s seq %d: %s",
@@ -155,11 +157,20 @@ class TranslationFanout:
         transcript_segment_id: int | None,
     ) -> None:
         """Translate, persist, optionally synthesize TTS, and publish."""
-        translated_text = await self._provider.translate(
-            text=event.text,
-            source_language=event.language,
-            target_language=target_language,
-        )
+        t0 = time.monotonic()
+        try:
+            translated_text = await self._provider.translate(
+                text=event.text,
+                source_language=event.language,
+                target_language=target_language,
+            )
+        except Exception:
+            provider_errors_total.labels(provider="google", operation="translate").inc()
+            raise
+        finally:
+            segment_translation_duration_seconds.labels(
+                provider="google", target_language=target_language
+            ).observe(time.monotonic() - t0)
 
         # Persist TranslationSegment.
         translation_segment_id: int | None = None
@@ -198,6 +209,9 @@ class TranslationFanout:
             "language": target_language,
             "text": translated_text,
             "source_language": event.language,
+            # Monotonic timestamp from the TranscriptEvent; used by the
+            # listener WebSocket to observe end-to-end pipeline latency.
+            "published_at": event.published_at,
         }
         if translation_segment_id is not None:
             msg["segment_id"] = translation_segment_id
