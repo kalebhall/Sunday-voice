@@ -590,6 +590,15 @@ export default function ListenerPage() {
             >
               ⛶
             </button>
+            <a
+              href={`/l/${code}/projection`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="lp-icon-btn"
+              title="Open projection view"
+            >
+              Proj
+            </a>
             <button
               type="button"
               className="lp-lang-chip"
