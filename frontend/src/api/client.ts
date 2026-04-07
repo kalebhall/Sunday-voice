@@ -27,6 +27,10 @@ export function hasTokens(): boolean {
   return accessToken !== null;
 }
 
+export function getAccessToken(): string | null {
+  return accessToken;
+}
+
 /** Attempt a silent token refresh. Returns true on success. */
 async function tryRefresh(): Promise<boolean> {
   if (!refreshToken) return false;
