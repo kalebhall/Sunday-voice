@@ -4,6 +4,7 @@ import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
 import SessionFormPage from "./pages/SessionFormPage";
 import ConsolePage from "./pages/ConsolePage";
+import ListenerPage from "./pages/ListenerPage";
 
 /** Redirect to /login when not authenticated. */
 function RequireAuth() {
@@ -22,6 +23,9 @@ function GuestOnly() {
 }
 
 const router = createBrowserRouter([
+  // Public anonymous listener route — no auth required.
+  { path: "/l/:code", element: <ListenerPage /> },
+
   {
     element: <GuestOnly />,
     children: [{ path: "/login", element: <LoginPage /> }],

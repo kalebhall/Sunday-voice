@@ -5,6 +5,7 @@ whenever any caller imports :mod:`app.models` (Alembic env, tests, app startup).
 """
 
 from app.models.audit import AuditLog
+from app.models.feedback import TranslationFeedback
 from app.models.role import ROLE_ADMIN, ROLE_OPERATOR, Role
 from app.models.segment import TranscriptSegment, TranslationSegment
 from app.models.session import (
@@ -26,6 +27,7 @@ __all__ = [
     "SessionLanguage",
     "SessionStatus",
     "TranscriptSegment",
+    "TranslationFeedback",
     "TranslationSegment",
     "UsageMeter",
     "User",
