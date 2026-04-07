@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
@@ -30,6 +31,9 @@ class TranscriptEvent:
     text: str
     start_ms: int | None = None
     end_ms: int | None = None
+    # Monotonic timestamp set when the event is created (post-transcription).
+    # Used by the listener WebSocket to measure end-to-end pipeline latency.
+    published_at: float = field(default_factory=time.monotonic)
 
 
 class SessionPubSub:

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, require_role
+from app.core.audit import write_audit_log
 from app.core.config import get_settings
 from app.core.security import hash_password
 from app.models import ROLE_ADMIN, AuditLog, Role, User, UsageMeter
@@ -146,6 +147,14 @@ async def create_user(
     db.add(user)
     await db.flush()
     await db.refresh(user, ["role"])
+    write_audit_log(
+        db,
+        action="admin.user.create",
+        actor_user_id=_admin.id,
+        target_type="user",
+        target_id=str(user.id),
+        details={"email": payload.email, "role_id": payload.role_id},
+    )
     await db.commit()
     await db.refresh(user)
     return _user_out(user)
@@ -215,6 +224,23 @@ async def update_user(
     if payload.password is not None:
         user.hashed_password = hash_password(payload.password)
 
+    write_audit_log(
+        db,
+        action="admin.user.update",
+        actor_user_id=admin.id,
+        target_type="user",
+        target_id=str(user_id),
+        details={
+            k: v
+            for k, v in {
+                "role_id": payload.role_id,
+                "is_active": payload.is_active,
+                "display_name": payload.display_name,
+                "password_changed": payload.password is not None,
+            }.items()
+            if v is not None
+        },
+    )
     await db.commit()
     await db.refresh(user, ["role"])
     return _user_out(user)
@@ -237,6 +263,13 @@ async def deactivate_user(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
     user.is_active = False
+    write_audit_log(
+        db,
+        action="admin.user.deactivate",
+        actor_user_id=admin.id,
+        target_type="user",
+        target_id=str(user_id),
+    )
     await db.commit()
 
 
@@ -430,6 +463,15 @@ async def update_budget(
 ) -> BudgetSettingsOut:
     await _set_config(db, _KEY_BUDGET, str(payload.monthly_budget_usd))
     await _set_config(db, _KEY_THRESHOLD, str(payload.alert_threshold))
+    write_audit_log(
+        db,
+        action="admin.budget.update",
+        actor_user_id=_admin.id,
+        details={
+            "monthly_budget_usd": float(payload.monthly_budget_usd),
+            "alert_threshold": payload.alert_threshold,
+        },
+    )
     await db.commit()
     return BudgetSettingsOut(
         monthly_budget_usd=payload.monthly_budget_usd,

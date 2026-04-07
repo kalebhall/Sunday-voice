@@ -25,6 +25,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.core.audit import write_audit_log_bg
 from app.db.session import get_sessionmaker
 from app.services.audio_ingest import (
     CHUNK_QUEUE_MAXSIZE,
@@ -84,6 +85,13 @@ async def operator_audio_ws(websocket: WebSocket, session_id: UUID) -> None:
         logger.info(
             "operator %d connected to session %s", operator_user_id, session_id
         )
+        await write_audit_log_bg(
+            sessionmaker,
+            action="operator.audio.connect",
+            actor_user_id=operator_user_id,
+            target_type="session",
+            target_id=str(session_id),
+        )
 
         # Bounded queue for backpressure between receive loop and transcription.
         chunk_queue: asyncio.Queue[bytes | None] = asyncio.Queue(
@@ -129,6 +137,13 @@ async def operator_audio_ws(websocket: WebSocket, session_id: UUID) -> None:
         await release_operator_lock(session_id)
         await transcript_pubsub.remove_if_empty(session_id)
         logger.info("operator lock released for session %s", session_id)
+        await write_audit_log_bg(
+            sessionmaker,
+            action="operator.audio.disconnect",
+            actor_user_id=operator_user_id,
+            target_type="session",
+            target_id=str(session_id),
+        )
 
 
 def reset_operator_locks() -> None:

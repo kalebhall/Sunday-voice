@@ -15,6 +15,7 @@ from app.api.deps import (
     client_identifier,
     get_login_rate_limiter,
 )
+from app.core.audit import write_audit_log
 from app.core.config import get_settings
 from app.core.rate_limit import SlidingWindowRateLimiter
 from app.core.security import (
@@ -79,11 +80,35 @@ async def login(
         # Still run a verify call against a dummy hash so timing doesn't leak
         # account existence. Cheap relative to a real bcrypt check anyway.
         verify_password(payload.password, _DUMMY_HASH)
+        write_audit_log(
+            db,
+            action="auth.login.failed",
+            ip_address=ident,
+            user_agent=request.headers.get("user-agent"),
+            details={"reason": "user_not_found_or_inactive", "email": payload.email},
+        )
+        await db.commit()
         raise invalid
     if not verify_password(payload.password, user.hashed_password):
+        write_audit_log(
+            db,
+            action="auth.login.failed",
+            actor_user_id=user.id,
+            ip_address=ident,
+            user_agent=request.headers.get("user-agent"),
+            details={"reason": "invalid_password"},
+        )
+        await db.commit()
         raise invalid
 
     user.last_login_at = datetime.now(timezone.utc)
+    write_audit_log(
+        db,
+        action="auth.login",
+        actor_user_id=user.id,
+        ip_address=ident,
+        user_agent=request.headers.get("user-agent"),
+    )
     await db.commit()
     await db.refresh(user)
 
@@ -114,6 +139,8 @@ async def refresh(payload: RefreshRequest, db: DbSession) -> TokenResponse:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="user not found or disabled",
         )
+    write_audit_log(db, action="auth.token_refresh", actor_user_id=user.id)
+    await db.commit()
     return _token_response(user)
 
 

@@ -17,7 +17,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, client_identifier, get_join_rate_limiter, require_role
+from app.core.audit import write_audit_log
 from app.core.config import get_settings
+from app.core.metrics import active_sessions as active_sessions_gauge
 from app.core.rate_limit import SlidingWindowRateLimiter
 from app.models import AudioTransport, Session, SessionLanguage, SessionStatus, User
 from app.schemas.session import (
@@ -145,6 +147,14 @@ async def create_session(
             )
         )
     db.add(session)
+    write_audit_log(
+        db,
+        action="session.create",
+        actor_user_id=user.id,
+        target_type="session",
+        target_id=str(session.id),
+        details={"name": session.name, "source_language": session.source_language},
+    )
     await db.commit()
     await db.refresh(session, attribute_names=["languages"])
     return _session_out(session)
@@ -234,7 +244,15 @@ async def start_session(
         )
     session.status = SessionStatus.ACTIVE
     session.started_at = datetime.now(tz=UTC)
+    write_audit_log(
+        db,
+        action="session.start",
+        actor_user_id=user.id,
+        target_type="session",
+        target_id=str(session.id),
+    )
     await db.commit()
+    active_sessions_gauge.inc()
     await db.refresh(session, attribute_names=["languages"])
     return _session_out(session)
 
@@ -259,7 +277,15 @@ async def stop_session(
         )
     session.status = SessionStatus.ENDED
     session.ended_at = datetime.now(tz=UTC)
+    write_audit_log(
+        db,
+        action="session.stop",
+        actor_user_id=user.id,
+        target_type="session",
+        target_id=str(session.id),
+    )
     await db.commit()
+    active_sessions_gauge.dec()
     await db.refresh(session, attribute_names=["languages"])
 
     # Publish kill-switch so listener WebSocket handlers disconnect immediately.

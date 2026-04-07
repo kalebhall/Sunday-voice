@@ -5,14 +5,18 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from sqlalchemy import func, select
 
 from app.api import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.metrics import active_sessions as active_sessions_gauge
 from app.core.middleware import RequestIDMiddleware
 from app.db.session import get_sessionmaker
+from app.models.session import Session, SessionStatus
 from app.services.listener_connections import listener_connections
 from app.services.retention import run_retention_cleanup
 from app.services.scheduler import PeriodicTask, Scheduler
@@ -93,6 +97,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     listener_connections._max_per_ip = settings.listener_max_connections_per_ip
     listener_connections._max_per_session = settings.listener_max_connections_per_session
 
+    # Seed active_sessions gauge from DB so the metric is correct after a restart.
+    try:
+        async with sessionmaker() as db:
+            count = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(Session)
+                    .where(Session.status == SessionStatus.ACTIVE)
+                )
+            ).scalar_one()
+            active_sessions_gauge.set(count)
+    except Exception:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "could not seed active_sessions gauge from DB; defaulting to 0"
+        )
+
     scheduler.start()
     app.state.scheduler = scheduler
     try:
@@ -123,6 +144,15 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router, prefix="/api")
     app.include_router(ws_router, prefix="/ws")
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> Response:
+        """Prometheus metrics endpoint.
+
+        Restrict access at the reverse-proxy layer (Caddy / Nginx) so only
+        the internal monitoring stack can scrape this endpoint.
+        """
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:
