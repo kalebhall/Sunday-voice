@@ -89,8 +89,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
         )
 
-    # Apply listener connection cap from settings.
+    # Apply listener connection caps from settings.
     listener_connections._max_per_ip = settings.listener_max_connections_per_ip
+    listener_connections._max_per_session = settings.listener_max_connections_per_session
 
     scheduler.start()
     app.state.scheduler = scheduler

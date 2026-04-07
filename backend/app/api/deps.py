@@ -23,6 +23,7 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 DbSession = Annotated[AsyncSession, Depends(get_session)]
 
 _login_rate_limiter: SlidingWindowRateLimiter | None = None
+_join_rate_limiter: SlidingWindowRateLimiter | None = None
 
 
 def get_login_rate_limiter() -> SlidingWindowRateLimiter:
@@ -41,6 +42,24 @@ def reset_login_rate_limiter() -> None:
     """Discard the cached limiter; used in tests to pick up config changes."""
     global _login_rate_limiter
     _login_rate_limiter = None
+
+
+def get_join_rate_limiter() -> SlidingWindowRateLimiter:
+    """Return the process-wide join rate limiter, building it lazily."""
+    global _join_rate_limiter
+    if _join_rate_limiter is None:
+        settings = get_settings()
+        _join_rate_limiter = SlidingWindowRateLimiter(
+            max_requests=settings.join_rate_limit_max_attempts,
+            window_seconds=settings.join_rate_limit_window_seconds,
+        )
+    return _join_rate_limiter
+
+
+def reset_join_rate_limiter() -> None:
+    """Discard the cached join limiter; used in tests to pick up config changes."""
+    global _join_rate_limiter
+    _join_rate_limiter = None
 
 
 def client_identifier(request: Request) -> str:

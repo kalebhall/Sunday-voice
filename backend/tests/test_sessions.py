@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.api.deps import reset_join_rate_limiter
 from app.core.security import create_access_token, hash_password
 from app.models import Role, User
 
@@ -321,3 +325,60 @@ def test_join_by_slug(client: TestClient, operator: User) -> None:
 def test_join_not_found(client: TestClient) -> None:
     resp = client.get("/api/sessions/join/ZZZZZZ")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Join rate limit
+# ---------------------------------------------------------------------------
+
+
+def test_join_rate_limit(client: TestClient) -> None:
+    """Exceed the join rate limit; expect 429 with Retry-After header."""
+    from app.core.config import get_settings
+
+    os.environ["JOIN_RATE_LIMIT_MAX_ATTEMPTS"] = "3"
+    os.environ["JOIN_RATE_LIMIT_WINDOW_SECONDS"] = "60"
+    get_settings.cache_clear()
+    reset_join_rate_limiter()
+
+    try:
+        for _ in range(3):
+            client.get("/api/sessions/join/ZZZZZZ")  # 404 but counts toward limit
+        resp = client.get("/api/sessions/join/ZZZZZZ")
+        assert resp.status_code == 429
+        assert "Retry-After" in resp.headers
+    finally:
+        del os.environ["JOIN_RATE_LIMIT_MAX_ATTEMPTS"]
+        del os.environ["JOIN_RATE_LIMIT_WINDOW_SECONDS"]
+        get_settings.cache_clear()
+        reset_join_rate_limiter()
+
+
+# ---------------------------------------------------------------------------
+# stop_session kill-switch (Redis publish)
+# ---------------------------------------------------------------------------
+
+
+def test_stop_session_publishes_kill_switch(client: TestClient, operator: User) -> None:
+    """stop_session should publish session_ended to the Redis control channel."""
+    created = client.post(
+        "/api/sessions", json={"name": "Kill"}, headers=_auth(operator)
+    ).json()
+    client.post(f"/api/sessions/{created['id']}/start", headers=_auth(operator))
+
+    mock_redis = MagicMock()
+    mock_redis.publish = AsyncMock()
+    mock_redis.aclose = AsyncMock()
+
+    with patch("app.api.routes.sessions.Redis") as MockRedis:
+        MockRedis.from_url.return_value = mock_redis
+        resp = client.post(
+            f"/api/sessions/{created['id']}/stop", headers=_auth(operator)
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ended"
+    # Verify kill-switch was published to the control channel.
+    mock_redis.publish.assert_awaited_once()
+    channel_arg = mock_redis.publish.call_args[0][0]
+    assert channel_arg == f"session:{created['id']}:control"
