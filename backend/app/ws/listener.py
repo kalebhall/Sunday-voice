@@ -138,6 +138,8 @@ async def _fetch_scrollback(
                 "language": row.language_code,
                 "text": row.text,
                 "source_language": row.transcript_segment.language,
+                "segment_id": row.id,
+                "tts_url": f"/api/tts/{row.id}",
             }
         )
     return segments
@@ -301,6 +303,8 @@ async def listener_ws(
                             "language": payload.get("language", lang),
                             "text": payload.get("text", ""),
                             "source_language": payload.get("source_language", ""),
+                            "segment_id": payload.get("segment_id"),
+                            "tts_url": payload.get("tts_url"),
                         }
                     )
                 else:

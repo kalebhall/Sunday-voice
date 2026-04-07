@@ -199,6 +199,8 @@ class TranslationFanout:
             "text": translated_text,
             "source_language": event.language,
         }
+        if translation_segment_id is not None:
+            msg["segment_id"] = translation_segment_id
         if tts_url:
             msg["tts_url"] = tts_url
         await self._redis.publish(channel, json.dumps(msg))
