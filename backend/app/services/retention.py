@@ -108,22 +108,22 @@ async def run_retention_cleanup(
                 sessions_purged=sessions_purged,
                 cutoff=cutoff,
             )
-            if result.had_work:
-                db.add(
-                    AuditLog(
-                        actor_user_id=None,
-                        action=RETENTION_AUDIT_ACTION,
-                        target_type="retention",
-                        target_id=None,
-                        details={
-                            "cutoff": cutoff.isoformat(),
-                            "retention_hours": retention_hours,
-                            "transcript_segments_deleted": transcripts,
-                            "translation_segments_deleted": translations,
-                            "sessions_purged": sessions_purged,
-                        },
-                    )
+            db.add(
+                AuditLog(
+                    actor_user_id=None,
+                    action=RETENTION_AUDIT_ACTION,
+                    target_type="retention",
+                    target_id=None,
+                    details={
+                        "cutoff": cutoff.isoformat(),
+                        "retention_hours": retention_hours,
+                        "transcript_segments_deleted": transcripts,
+                        "translation_segments_deleted": translations,
+                        "sessions_purged": sessions_purged,
+                        "no_op": not result.had_work,
+                    },
                 )
+            )
 
     if result.had_work:
         logger.info(

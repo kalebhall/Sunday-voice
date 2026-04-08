@@ -12,6 +12,8 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    sourcemap: true,
+    // Sourcemaps expose the full source tree in production; disable them.
+    // Enable locally via VITE_SOURCEMAP=true if needed for debugging.
+    sourcemap: process.env.VITE_SOURCEMAP === "true",
   },
 });

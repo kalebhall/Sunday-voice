@@ -9,6 +9,30 @@
 translate.thestand.app {
     encode zstd gzip
 
+    # Security headers for all responses.
+    header {
+        # Prevent the page from being embedded in frames (clickjacking).
+        X-Frame-Options "DENY"
+        # Prevent MIME-type sniffing.
+        X-Content-Type-Options "nosniff"
+        # Limit referrer information to the origin only.
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Permissions policy: disable features the app does not use.
+        Permissions-Policy "geolocation=(), camera=(), payment=()"
+        # Content-Security-Policy.
+        # - default-src: block everything not explicitly allowed.
+        # - script-src: only same-origin scripts (no inline, no eval).
+        # - style-src: same-origin + unsafe-inline (Vite injects inline styles).
+        # - connect-src: API and WebSocket on same origin.
+        # - media-src: same-origin (TTS audio).
+        # - object-src, frame-ancestors: block entirely.
+        Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss:; media-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        # HSTS: trust the TLS cert for 1 year (enable once stable).
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        # Remove the Server header to reduce fingerprinting.
+        -Server
+    }
+
     # Block Prometheus scrape endpoint from the public internet.
     # Allow access from the loopback interface only (scrape from localhost).
     @metrics path /metrics

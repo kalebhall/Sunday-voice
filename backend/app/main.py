@@ -88,6 +88,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             removed = tts_service.evict_expired()
             if removed:
                 _tts_logger.info("tts cache eviction removed %d entries", removed)
+                from app.core.audit import write_audit_log_bg
+
+                await write_audit_log_bg(
+                    sessionmaker,
+                    action="retention.tts_cache_eviction",
+                    target_type="tts_cache",
+                    details={"entries_removed": removed},
+                )
 
         scheduler.add(
             PeriodicTask(
