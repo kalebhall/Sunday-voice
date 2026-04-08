@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging as _logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import func, select
 
 from app.api import api_router
@@ -20,8 +22,11 @@ from app.models.session import Session, SessionStatus
 from app.services.listener_connections import listener_connections
 from app.services.retention import run_retention_cleanup
 from app.services.scheduler import PeriodicTask, Scheduler
+from app.services.translation import TranslationFanout
 from app.services.tts import TTSCache, TTSService
 from app.ws import ws_router
+
+_log = _logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -109,10 +114,52 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             ).scalar_one()
             active_sessions_gauge.set(count)
     except Exception:
-        import logging as _log
-        _log.getLogger(__name__).warning(
-            "could not seed active_sessions gauge from DB; defaulting to 0"
+        _log.warning("could not seed active_sessions gauge from DB; defaulting to 0")
+
+    # Translation fanout — consumes TranscriptEvents and publishes translated
+    # segments to Redis pub/sub for listener WebSocket delivery.
+    # Requires GOOGLE_CLOUD_PROJECT to be set; logs a warning if missing.
+    fanout_redis = AsyncRedis.from_url(settings.redis_url, decode_responses=True)
+    translation_fanout: TranslationFanout | None = None
+
+    if settings.google_cloud_project:
+        from app.providers.google_translate import GoogleV3TranslationProvider
+
+        translate_provider = GoogleV3TranslationProvider(
+            project=settings.google_cloud_project,
+            location=settings.google_translate_location,
+            credentials_file=settings.google_application_credentials or None,
         )
+        tts_svc = getattr(app.state, "tts_service", None)
+        translation_fanout = TranslationFanout(
+            translation_provider=translate_provider,
+            db_sessionmaker=sessionmaker,
+            redis=fanout_redis,
+            tts_service=tts_svc,
+        )
+        # Re-arm the fanout for any sessions that were already active before
+        # this worker started (e.g. after a rolling restart).
+        try:
+            async with sessionmaker() as db:
+                active_ids = (
+                    await db.execute(
+                        select(Session.id).where(Session.status == SessionStatus.ACTIVE)
+                    )
+                ).scalars().all()
+            for sid in active_ids:
+                await translation_fanout.start(sid)
+            if active_ids:
+                _log.info(
+                    "translation fanout seeded for %d active session(s)", len(active_ids)
+                )
+        except Exception:
+            _log.warning("could not seed translation fanout from DB")
+    else:
+        _log.warning(
+            "GOOGLE_CLOUD_PROJECT not configured; translation pipeline disabled"
+        )
+
+    app.state.translation_fanout = translation_fanout
 
     scheduler.start()
     app.state.scheduler = scheduler
@@ -120,6 +167,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await scheduler.stop()
+        if translation_fanout is not None:
+            await translation_fanout.stop_all()
+        await fanout_redis.aclose()
 
 
 def create_app() -> FastAPI:

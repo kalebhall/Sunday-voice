@@ -318,11 +318,14 @@ async def listener_ws(
                     last_seq = seq
 
                     # Observe end-to-end pipeline latency when available.
+                    # published_at is a wall-clock float (time.time()), so we
+                    # compare it with time.time() here and forward it to the
+                    # client for browser-side latency measurement.
                     published_at = payload.get("published_at")
                     if published_at is not None:
                         try:
                             segment_pipeline_duration_seconds.observe(
-                                time.monotonic() - float(published_at)
+                                time.time() - float(published_at)
                             )
                         except (TypeError, ValueError):
                             pass
@@ -336,6 +339,9 @@ async def listener_ws(
                             "source_language": payload.get("source_language", ""),
                             "segment_id": payload.get("segment_id"),
                             "tts_url": payload.get("tts_url"),
+                            # Wall-clock float forwarded to clients so they can
+                            # compute their own end-to-end latency observations.
+                            "published_at": published_at,
                         }
                     )
                 else:

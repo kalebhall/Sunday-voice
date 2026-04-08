@@ -80,6 +80,10 @@ async def operator_audio_ws(websocket: WebSocket, session_id: UUID) -> None:
         await websocket.close(code=4409, reason="another operator is already connected")
         return
 
+    # Grab the translation fanout from app state (may be None if Google
+    # Cloud credentials are not configured).
+    translation_fanout = getattr(websocket.app.state, "translation_fanout", None)
+
     try:
         await websocket.accept()
         logger.info(
@@ -92,6 +96,12 @@ async def operator_audio_ws(websocket: WebSocket, session_id: UUID) -> None:
             target_type="session",
             target_id=str(session_id),
         )
+
+        # Start the translation fanout for this session on this worker so
+        # TranscriptEvents produced by the transcription task below are
+        # translated and published to Redis.
+        if translation_fanout is not None:
+            await translation_fanout.start(session_id)
 
         # Bounded queue for backpressure between receive loop and transcription.
         chunk_queue: asyncio.Queue[bytes | None] = asyncio.Queue(
@@ -133,6 +143,8 @@ async def operator_audio_ws(websocket: WebSocket, session_id: UUID) -> None:
             )
         finally:
             await drain_transcription(chunk_queue, transcription, session_id)
+            if translation_fanout is not None:
+                await translation_fanout.stop(session_id)
     finally:
         await release_operator_lock(session_id)
         await transcript_pubsub.remove_if_empty(session_id)

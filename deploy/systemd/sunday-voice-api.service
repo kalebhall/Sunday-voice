@@ -12,7 +12,7 @@ EnvironmentFile=/opt/sunday-voice/.env
 ExecStart=/opt/sunday-voice/.venv/bin/uvicorn app.main:app \
     --host 0.0.0.0 --port 8000 \
     --app-dir /opt/sunday-voice/backend \
-    --workers 2 --proxy-headers
+    --workers 4 --proxy-headers
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
