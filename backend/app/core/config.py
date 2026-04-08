@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     # Providers
     openai_api_key: str = ""
     whisper_model: str = "whisper-1"
+    # Max simultaneous Whisper API calls across all sessions.
+    # Tune upward if Whisper headroom allows; lower if you hit 429s.
+    whisper_max_concurrent: int = 5
+    # Flush audio buffer to Whisper after this many bytes.  At ~16 KB/s
+    # (Opus 128 kbps) a 2.5 s chunk is ~40 KB, so 32 KB triggers once per
+    # chunk.  The original 1 MiB default batched ~25 chunks (62 s) — far too
+    # large for real-time operation.
+    whisper_chunk_flush_bytes: int = 32_768
     google_application_credentials: str = ""
     google_cloud_project: str = ""
     google_translate_location: str = "global"

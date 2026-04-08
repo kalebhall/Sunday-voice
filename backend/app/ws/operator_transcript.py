@@ -76,6 +76,10 @@ async def operator_transcript_ws(websocket: WebSocket, session_id: UUID) -> None
         await websocket.close(code=4409, reason="another operator is already connected")
         return
 
+    # Grab the translation fanout from app state (may be None if Google
+    # Cloud credentials are not configured).
+    translation_fanout = getattr(websocket.app.state, "translation_fanout", None)
+
     try:
         await websocket.accept()
         logger.info(
@@ -90,6 +94,11 @@ async def operator_transcript_ws(websocket: WebSocket, session_id: UUID) -> None
             target_type="session",
             target_id=str(session_id),
         )
+
+        # Start the translation fanout for this session so TranscriptEvents
+        # are translated and published to Redis for listener delivery.
+        if translation_fanout is not None:
+            await translation_fanout.start(session_id)
 
         # Ensure the pub/sub channel exists for this session.
         await transcript_pubsub.get_or_create(session_id)
@@ -149,6 +158,9 @@ async def operator_transcript_ws(websocket: WebSocket, session_id: UUID) -> None
                 operator_user_id,
                 session_id,
             )
+        finally:
+            if translation_fanout is not None:
+                await translation_fanout.stop(session_id)
     finally:
         await release_operator_lock(session_id)
         await transcript_pubsub.remove_if_empty(session_id)

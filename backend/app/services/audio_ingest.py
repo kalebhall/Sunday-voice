@@ -31,6 +31,34 @@ CHUNK_QUEUE_MAXSIZE = 30  # ~60-90 s of audio at 2-3 s chunks
 _active_operators: dict[UUID, bool] = {}
 _active_operators_lock = asyncio.Lock()
 
+# ---------------------------------------------------------------------------
+# Global Whisper concurrency semaphore
+# ---------------------------------------------------------------------------
+
+_whisper_semaphore: asyncio.Semaphore | None = None
+_whisper_semaphore_init_lock = asyncio.Lock()
+
+
+async def get_whisper_semaphore() -> asyncio.Semaphore:
+    """Return the process-wide Whisper concurrency semaphore, creating it lazily."""
+    global _whisper_semaphore
+    if _whisper_semaphore is None:
+        async with _whisper_semaphore_init_lock:
+            if _whisper_semaphore is None:
+                settings = get_settings()
+                _whisper_semaphore = asyncio.Semaphore(settings.whisper_max_concurrent)
+                logger.info(
+                    "whisper semaphore initialised: max_concurrent=%d",
+                    settings.whisper_max_concurrent,
+                )
+    return _whisper_semaphore
+
+
+def reset_whisper_semaphore() -> None:
+    """Discard the cached semaphore.  Used in tests."""
+    global _whisper_semaphore
+    _whisper_semaphore = None
+
 
 # ---------------------------------------------------------------------------
 # Operator audio byte rate limiter
@@ -162,6 +190,8 @@ async def transcription_task(
     provider = WhisperAPIProvider(
         api_key=settings.openai_api_key,
         model=settings.whisper_model,
+        chunk_flush_bytes=settings.whisper_chunk_flush_bytes,
+        semaphore=await get_whisper_semaphore(),
     )
 
     sequence = 0

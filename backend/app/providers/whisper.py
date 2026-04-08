@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import time
@@ -56,6 +57,7 @@ class WhisperAPIProvider:
         chunk_flush_bytes: int = _CHUNK_FLUSH_BYTES,
         http_client: httpx.AsyncClient | None = None,
         base_url: str = "https://api.openai.com/v1",
+        semaphore: asyncio.Semaphore | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -66,6 +68,9 @@ class WhisperAPIProvider:
         self._chunk_flush_bytes = chunk_flush_bytes
         self._base_url = base_url.rstrip("/")
         self._external_client = http_client
+        # Optional semaphore that limits the number of concurrent API calls
+        # across all provider instances (pass a shared asyncio.Semaphore).
+        self._semaphore = semaphore
 
     # -- TranscriptionProvider protocol ----------------------------------------
 
@@ -111,7 +116,11 @@ class WhisperAPIProvider:
 
         t0 = time.monotonic()
         try:
-            response = await self._post_with_retry(data=data, files=files)
+            if self._semaphore is not None:
+                async with self._semaphore:
+                    response = await self._post_with_retry(data=data, files=files)
+            else:
+                response = await self._post_with_retry(data=data, files=files)
         except Exception:
             provider_errors_total.labels(provider="openai", operation="transcribe").inc()
             raise

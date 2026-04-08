@@ -31,9 +31,11 @@ class TranscriptEvent:
     text: str
     start_ms: int | None = None
     end_ms: int | None = None
-    # Monotonic timestamp set when the event is created (post-transcription).
-    # Used by the listener WebSocket to measure end-to-end pipeline latency.
-    published_at: float = field(default_factory=time.monotonic)
+    # Wall-clock timestamp (time.time()) set when the event is created
+    # (post-transcription).  Wall-clock is used so the value is comparable
+    # across worker processes and from the client side for e2e latency
+    # measurement.
+    published_at: float = field(default_factory=time.time)
 
 
 class SessionPubSub:
