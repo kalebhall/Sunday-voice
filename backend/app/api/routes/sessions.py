@@ -224,6 +224,28 @@ async def update_session(
                 )
             )
 
+    changed: dict[str, object] = {
+        k: v
+        for k, v in {
+            "name": payload.name,
+            "source_language": payload.source_language,
+            "audio_transport": payload.audio_transport,
+            "target_languages": (
+                [{"language_code": l.language_code, "tts_enabled": l.tts_enabled} for l in payload.target_languages]
+                if payload.target_languages is not None
+                else None
+            ),
+        }.items()
+        if v is not None
+    }
+    write_audit_log(
+        db,
+        action="session.update",
+        actor_user_id=user.id,
+        target_type="session",
+        target_id=str(session.id),
+        details=changed,
+    )
     await db.commit()
     await db.refresh(session, attribute_names=["languages"])
     return _session_out(session)

@@ -31,7 +31,9 @@ class Settings(BaseSettings):
     app_cors_origins: str = "http://localhost:5173"
 
     # Security
-    secret_key: str = Field(default="change-me", min_length=8)
+    # No default: SECRET_KEY must be set explicitly in the environment.
+    # Generate with: python -c "import secrets; print(secrets.token_urlsafe(48))"
+    secret_key: str = Field(min_length=32)
     jwt_algorithm: str = "HS256"
     jwt_access_token_ttl_minutes: int = 60
     jwt_refresh_token_ttl_days: int = 14

@@ -29,6 +29,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.api.deps import DbSession, require_role
+from app.core.audit import write_audit_log_bg
+from app.db.session import get_sessionmaker
 from app.models import User
 from app.services.audio_ingest import (
     CHUNK_QUEUE_MAXSIZE,
@@ -167,6 +169,7 @@ async def _on_connection_closed(
     session_id: UUID,
     chunk_queue: asyncio.Queue[bytes | None],
     task: asyncio.Task[None],
+    operator_user_id: int,
 ) -> None:
     """Clean up after the peer connection closes."""
     await drain_transcription(chunk_queue, task, session_id)
@@ -174,6 +177,14 @@ async def _on_connection_closed(
     await transcript_pubsub.remove_if_empty(session_id)
     _peer_connections.pop(session_id, None)
     logger.info("webrtc connection closed for session %s", session_id)
+    await write_audit_log_bg(
+        get_sessionmaker(),
+        action="operator.audio.disconnect",
+        actor_user_id=operator_user_id,
+        target_type="session",
+        target_id=str(session_id),
+        details={"transport": "webrtc"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +220,7 @@ async def webrtc_offer(
         )
 
     source_language = session.source_language
+    operator_user_id = user.id
 
     # --- Single-operator lock ------------------------------------------------
     if not await acquire_operator_lock(session_id):
@@ -216,6 +228,15 @@ async def webrtc_offer(
             status_code=status.HTTP_409_CONFLICT,
             detail="another operator is already connected",
         )
+
+    await write_audit_log_bg(
+        get_sessionmaker(),
+        action="operator.audio.connect",
+        actor_user_id=operator_user_id,
+        target_type="session",
+        target_id=str(session_id),
+        details={"transport": "webrtc"},
+    )
 
     try:
         pc = RTCPeerConnection()
@@ -259,7 +280,7 @@ async def webrtc_offer(
                 session_id,
             )
             if pc.connectionState in ("failed", "closed", "disconnected"):
-                await _on_connection_closed(pc, session_id, chunk_queue, tx_task)
+                await _on_connection_closed(pc, session_id, chunk_queue, tx_task, operator_user_id)
 
         # --- SDP exchange ----------------------------------------------------
         await pc.setRemoteDescription(
