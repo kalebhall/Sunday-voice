@@ -1,0 +1,17 @@
+[Unit]
+Description=Sunday Voice – build React frontend (one-shot)
+# Not enabled for auto-start. Invoked explicitly by deploy.sh after a pull
+# that changes frontend source, or on first install.
+
+[Service]
+Type=oneshot
+User=sundayvoice
+Group=sundayvoice
+WorkingDirectory=/opt/sunday-voice/frontend
+# HOME must point somewhere writable so npm can resolve its cache.
+Environment=HOME=/opt/sunday-voice
+# npm ci installs from the lockfile; npm run build writes to frontend/dist.
+ExecStart=/usr/bin/npm ci --prefer-offline
+ExecStart=/usr/bin/npm run build
+StandardOutput=journal
+StandardError=journal

@@ -1,16 +1,47 @@
-# Sunday Voice reverse proxy (Caddy)
-# Replace sundayvoice.example.org with your actual hostname.
-sundayvoice.example.org {
+# Sunday Voice – Caddy reverse proxy
+# TLS is provisioned automatically by Caddy via Let's Encrypt.
+# Set the DOMAIN environment variable before running caddy, or replace the
+# placeholder below with the real hostname.
+#
+# Caddy serves the React SPA static assets directly from the filesystem
+# (frontend/dist) so uvicorn handles only API and WebSocket traffic.
+
+translate.thestand.app {
     encode zstd gzip
 
-    # WebSocket endpoints (operator ingest + listener fan-out)
-    @ws path /ws/*
-    reverse_proxy @ws localhost:8000
+    # Block Prometheus scrape endpoint from the public internet.
+    # Allow access from the loopback interface only (scrape from localhost).
+    @metrics path /metrics
+    respond @metrics "Forbidden" 403
 
-    # API
-    @api path /api/*
-    reverse_proxy @api localhost:8000
+    # WebSocket endpoints (operator audio ingest + listener text fan-out).
+    handle /ws/* {
+        reverse_proxy localhost:8000
+    }
 
-    # Static frontend build output served by FastAPI (or directly by Caddy)
-    reverse_proxy localhost:8000
+    # REST API.
+    handle /api/* {
+        reverse_proxy localhost:8000
+    }
+
+    # App health probes (liveness / readiness).
+    handle /healthz {
+        reverse_proxy localhost:8000
+    }
+    handle /readyz {
+        reverse_proxy localhost:8000
+    }
+
+    # React SPA.  Serve pre-built static assets directly; fall back to
+    # index.html for any path the client-side router owns.
+    handle {
+        root * /opt/sunday-voice/frontend/dist
+        try_files {path} /index.html
+        file_server {
+            # Cache immutable hashed assets aggressively; let the browser
+            # revalidate index.html on every request.
+            precompressed br gzip
+        }
+    }
 }
+
