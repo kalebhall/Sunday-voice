@@ -35,7 +35,14 @@ apt update && apt install -y \
   caddy git curl
 ```
 
-Install Node.js 20 via NodeSource or `nvm`.
+INSTALL NODE.JS (LTS)
+
+```
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+node -v
+npm -v
+```
 
 ### 2. Clone the repository
 
