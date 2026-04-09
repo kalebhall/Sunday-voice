@@ -54,10 +54,10 @@ chown -R sunday-voice:sunday-voice /opt/sunday-voice
 
 ```bash
 cd /opt/sunday-voice
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+make install
 ```
+
+This creates `.venv` and installs all backend dependencies from `pyproject.toml`.
 
 ### 5. Build the frontend
 
@@ -93,9 +93,7 @@ sudo -u postgres psql -c "CREATE USER sunday_voice WITH PASSWORD 'yourpassword';
 sudo -u postgres psql -c "CREATE DATABASE sunday_voice OWNER sunday_voice;"
 
 # Run migrations
-source .venv/bin/activate
-cd /opt/sunday-voice
-python manage.py migrate
+make migrate
 ```
 
 ### 8. Install the systemd service
@@ -140,14 +138,13 @@ cd /opt/sunday-voice
 git pull origin main
 
 # Update Python dependencies
-source .venv/bin/activate
-pip install -r requirements.txt
+make install
 
 # Rebuild the frontend (if changed)
-cd frontend && npm ci && npm run build && cd ..
+make frontend-build
 
 # Run any new database migrations
-python manage.py migrate
+make migrate
 
 # Restart the service
 systemctl restart sunday-voice
