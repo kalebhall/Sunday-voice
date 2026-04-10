@@ -10,7 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve .env relative to this file so it's found regardless of cwd.
 # config.py lives at backend/app/core/config.py → 3 parents up = project root.
-_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILE = _PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
@@ -89,6 +90,10 @@ class Settings(BaseSettings):
     # Cost controls
     monthly_budget_usd: float = 50.0
     budget_alert_threshold: float = 0.8
+
+    # Static files: path to the built frontend dist directory.
+    # Override via STATIC_DIR env var if the frontend is built elsewhere.
+    static_dir: str = str(_PROJECT_ROOT / "frontend" / "dist")
 
     @property
     def cors_origins_list(self) -> list[str]:

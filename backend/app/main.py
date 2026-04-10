@@ -6,8 +6,12 @@ import logging as _logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import func, select
@@ -221,6 +225,30 @@ def create_app() -> FastAPI:
         their respective startup hooks.
         """
         return {"status": "ready"}
+
+    # Serve the built React frontend.
+    # Mount the hashed /assets bundle first so StaticFiles handles it directly,
+    # then use a catch-all to return index.html for all other paths (enabling
+    # React Router's HTML5 history mode).  API and WS routes are registered
+    # above and therefore take priority over the catch-all.
+    static_dir = Path(settings.static_dir)
+    if static_dir.is_dir():
+        assets_dir = static_dir / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def serve_spa(full_path: str) -> FileResponse:
+            target = static_dir / full_path
+            if target.is_file():
+                return FileResponse(target)
+            return FileResponse(static_dir / "index.html")
+    else:
+        _log.warning(
+            "static_dir %s does not exist; frontend will not be served. "
+            "Run 'npm ci && npm run build' in the frontend/ directory.",
+            static_dir,
+        )
 
     return app
 
