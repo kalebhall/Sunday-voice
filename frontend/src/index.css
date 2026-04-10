@@ -660,6 +660,38 @@ body {
   margin-top: 0.625rem;
 }
 
+.viewer-link-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.viewer-link-url {
+  font-size: 0.8rem;
+  font-family: monospace;
+  color: var(--color-primary);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+}
+
+.viewer-link-url:hover {
+  text-decoration: underline;
+}
+
+.join-code-inline {
+  font-size: 0.8rem;
+}
+
+.capture-btn-group {
+  display: flex;
+  gap: 0.5rem;
+}
+
 /* ---- Transcript panels ---- */
 
 .console-panels {

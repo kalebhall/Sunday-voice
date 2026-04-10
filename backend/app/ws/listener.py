@@ -104,14 +104,48 @@ async def _fetch_scrollback(
     lang: str,
     limit: int,
     after_seq: int,
+    source_language: str,
 ) -> list[dict]:
-    """Load the most recent translated segments from the database.
+    """Load the most recent segments from the database.
 
-    Returns up to *limit* segments whose source transcript sequence is
-    greater than *after_seq*, ordered oldest-first so the client can
-    append them in order.
+    For the source language, queries TranscriptSegment directly.
+    For target languages, queries TranslationSegment.
+
+    Returns up to *limit* segments whose sequence is greater than *after_seq*,
+    ordered oldest-first so the client can append them in order.
     """
+    from app.models.segment import TranscriptSegment
+
     sessionmaker = get_sessionmaker()
+
+    if lang == source_language:
+        # Source language: read directly from TranscriptSegment rows.
+        async with sessionmaker() as db:
+            stmt = select(TranscriptSegment).where(
+                TranscriptSegment.session_id == session_id,
+                TranscriptSegment.language == lang,
+            )
+            if after_seq > 0:
+                stmt = stmt.where(TranscriptSegment.sequence > after_seq)
+            stmt = stmt.order_by(TranscriptSegment.sequence.desc()).limit(limit)
+            rows = (await db.execute(stmt)).scalars().all()
+
+        segments = []
+        for row in reversed(list(rows)):
+            segments.append(
+                {
+                    "type": "segment",
+                    "seq": row.sequence,
+                    "language": row.language,
+                    "text": row.text,
+                    "source_language": row.language,
+                    "segment_id": row.id,
+                    "tts_url": None,
+                }
+            )
+        return segments
+
+    # Target language: read from TranslationSegment rows joined to TranscriptSegment.
     async with sessionmaker() as db:
         stmt = (
             select(TranslationSegment)
@@ -119,22 +153,13 @@ async def _fetch_scrollback(
                 TranslationSegment.session_id == session_id,
                 TranslationSegment.language_code == lang,
             )
-            .join(
-                TranslationSegment.transcript_segment,
-            )
+            .join(TranslationSegment.transcript_segment)
         )
-
-        # Import here to avoid circular — only needed for the join filter.
-        from app.models.segment import TranscriptSegment
 
         if after_seq > 0:
             stmt = stmt.where(TranscriptSegment.sequence > after_seq)
 
-        stmt = (
-            stmt.order_by(TranscriptSegment.sequence.desc())
-            .limit(limit)
-        )
-
+        stmt = stmt.order_by(TranscriptSegment.sequence.desc()).limit(limit)
         rows = (await db.execute(stmt)).scalars().all()
 
     # Reverse so oldest is first.
@@ -230,7 +255,9 @@ async def listener_ws(
 
         # --- Scrollback ------------------------------------------------------
         scrollback_limit = getattr(settings, "listener_scrollback_limit", 50)
-        scrollback = await _fetch_scrollback(session_id, lang, scrollback_limit, after_seq)
+        scrollback = await _fetch_scrollback(
+            session_id, lang, scrollback_limit, after_seq, source_language
+        )
 
         await websocket.send_json(
             {
