@@ -13,6 +13,7 @@ from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import func, select
 
 from app.api import api_router
+from app.core.audit import write_audit_log_bg
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import active_sessions as active_sessions_gauge
@@ -81,21 +82,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.tts_service = tts_service
 
         # Periodic cache eviction aligned with retention.
-        import logging as _logging
-        _tts_logger = _logging.getLogger(__name__)
-
         async def _tts_evict_job() -> None:
             removed = tts_service.evict_expired()
             if removed:
-                _tts_logger.info("tts cache eviction removed %d entries", removed)
-                from app.core.audit import write_audit_log_bg
-
-                await write_audit_log_bg(
-                    sessionmaker,
-                    action="retention.tts_cache_eviction",
-                    target_type="tts_cache",
-                    details={"entries_removed": removed},
-                )
+                _log.info("tts cache eviction removed %d entries", removed)
+            else:
+                _log.debug("tts cache eviction no-op")
+            await write_audit_log_bg(
+                sessionmaker,
+                action="retention.tts_cache_eviction",
+                target_type="tts_cache",
+                details={"entries_removed": removed, "no_op": removed == 0},
+            )
 
         scheduler.add(
             PeriodicTask(
