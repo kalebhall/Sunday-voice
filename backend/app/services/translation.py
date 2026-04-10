@@ -19,7 +19,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models.segment import TranscriptSegment, TranslationSegment
+from app.models.segment import TranslationSegment
 from app.models.session import SessionLanguage
 from app.core.metrics import provider_errors_total, segment_translation_duration_seconds
 from app.providers.base import CostMeter, TranslationProvider
@@ -116,6 +116,13 @@ class TranslationFanout:
 
     async def _handle_event(self, event: TranscriptEvent) -> None:
         """Translate a single transcript event to all target languages."""
+        # Persist the source TranscriptSegment row (needed for FKs and scrollback).
+        transcript_segment_id = await self._persist_transcript_segment(event)
+
+        # Publish the source transcript to its own language channel so the
+        # operator console (and any source-language listeners) can display it.
+        await self._publish_source_transcript(event, transcript_segment_id)
+
         target_languages = await self._get_target_languages(event.session_id)
 
         # Skip source language — no translation needed.
@@ -125,11 +132,6 @@ class TranslationFanout:
 
         if not languages_to_translate:
             return
-
-        # Look up the TranscriptSegment row (needed for FK).
-        transcript_segment_id = await self._get_transcript_segment_id(
-            event.session_id, event.sequence
-        )
 
         # Fan out translations concurrently.
         results = await asyncio.gather(
@@ -227,6 +229,69 @@ class TranslationFanout:
             bool(tts_url),
         )
 
+    async def _persist_transcript_segment(self, event: TranscriptEvent) -> int | None:
+        """Insert a TranscriptSegment row if it doesn't already exist.
+
+        Returns the row's primary key, or None on failure.
+        """
+        from app.models.segment import TranscriptSegment
+
+        try:
+            async with self._db_sessionmaker() as db:
+                existing = (
+                    await db.execute(
+                        select(TranscriptSegment.id).where(
+                            TranscriptSegment.session_id == event.session_id,
+                            TranscriptSegment.sequence == event.sequence,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if existing is not None:
+                    return existing
+
+                segment = TranscriptSegment(
+                    session_id=event.session_id,
+                    sequence=event.sequence,
+                    language=event.language,
+                    text=event.text,
+                    start_ms=event.start_ms,
+                    end_ms=event.end_ms,
+                )
+                db.add(segment)
+                await db.commit()
+                await db.refresh(segment)
+                return segment.id
+        except Exception:
+            logger.exception(
+                "failed to persist TranscriptSegment session=%s seq=%d",
+                event.session_id,
+                event.sequence,
+            )
+            return None
+
+    async def _publish_source_transcript(
+        self, event: TranscriptEvent, segment_id: int | None
+    ) -> None:
+        """Publish the raw source transcript to its own Redis language channel."""
+        channel = f"session:{event.session_id}:lang:{event.language}"
+        msg: dict = {
+            "session_id": str(event.session_id),
+            "sequence": event.sequence,
+            "language": event.language,
+            "text": event.text,
+            "source_language": event.language,
+            "published_at": event.published_at,
+        }
+        if segment_id is not None:
+            msg["segment_id"] = segment_id
+        await self._redis.publish(channel, json.dumps(msg))
+        logger.debug(
+            "published source transcript seq=%d lang=%s session=%s",
+            event.sequence,
+            event.language,
+            event.session_id,
+        )
+
     async def _get_target_languages(self, session_id: UUID) -> list[str]:
         """Fetch enabled target language codes for a session."""
         async with self._db_sessionmaker() as db:
@@ -236,19 +301,6 @@ class TranslationFanout:
                 )
             )
             return list(result.scalars().all())
-
-    async def _get_transcript_segment_id(
-        self, session_id: UUID, sequence: int
-    ) -> int | None:
-        """Look up the transcript segment PK by session + sequence."""
-        async with self._db_sessionmaker() as db:
-            result = await db.execute(
-                select(TranscriptSegment.id).where(
-                    TranscriptSegment.session_id == session_id,
-                    TranscriptSegment.sequence == sequence,
-                )
-            )
-            return result.scalar_one_or_none()
 
     async def _is_tts_enabled(self, session_id: UUID, language_code: str) -> bool:
         """Check if TTS is enabled for a language in a session."""

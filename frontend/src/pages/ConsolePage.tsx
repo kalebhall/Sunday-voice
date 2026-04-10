@@ -18,7 +18,7 @@ interface Segment {
   text: string;
 }
 
-type CaptureState = "idle" | "starting" | "active" | "stopping" | "error";
+type CaptureState = "idle" | "starting" | "active" | "pausing" | "stopping" | "error";
 
 // BCP-47 language tag mapping for Web Speech API
 const SPEECH_LANG_TAG: Record<string, string> = {
@@ -99,6 +99,9 @@ export default function ConsolePage() {
   const [langWsState, setLangWsState] = useState<Map<string, WsState>>(
     new Map(),
   );
+
+  // ----- Viewer link copy state -----
+  const [linkCopied, setLinkCopied] = useState(false);
 
   // ----- Refs -----
   const mountedRef = useRef(true);
@@ -476,8 +479,30 @@ export default function ConsolePage() {
     }
   }
 
-  // ----- Stop capture -----
-  async function stopCapture() {
+  // ----- Pause capture (stops audio only, session stays active) -----
+  async function pauseCapture() {
+    setCaptureState("pausing");
+    captureActiveRef.current = false;
+
+    if (recorderRef.current?.state !== "inactive") recorderRef.current?.stop();
+    recorderRef.current = null;
+
+    operatorWsRef.current?.close();
+    operatorWsRef.current = null;
+
+    peerConnRef.current?.close();
+    peerConnRef.current = null;
+
+    speechRecogRef.current?.stop();
+    speechRecogRef.current = null;
+
+    await teardownAudio();
+
+    setCaptureState("idle");
+  }
+
+  // ----- End session (stops audio + ends session + navigates away) -----
+  async function endSession() {
     setCaptureState("stopping");
     captureActiveRef.current = false;
 
@@ -689,18 +714,29 @@ export default function ConsolePage() {
               </div>
             </div>
 
-            {/* Start / Stop */}
+            {/* Start / Pause / End session */}
             <div className="control-block control-block--action">
               {(captureState === "idle" || captureState === "error") && (
-                <button
-                  type="button"
-                  className="btn btn-primary console-capture-btn"
-                  onClick={() => void startCapture()}
-                >
-                  {session.status === "draft"
-                    ? "Start session"
-                    : "Start capture"}
-                </button>
+                <div className="capture-btn-group">
+                  <button
+                    type="button"
+                    className="btn btn-primary console-capture-btn"
+                    onClick={() => void startCapture()}
+                  >
+                    {session.status === "draft"
+                      ? "Start session"
+                      : "Start capture"}
+                  </button>
+                  {session.status === "active" && (
+                    <button
+                      type="button"
+                      className="btn btn-danger console-capture-btn"
+                      onClick={() => void endSession()}
+                    >
+                      End session
+                    </button>
+                  )}
+                </div>
               )}
               {captureState === "starting" && (
                 <button
@@ -712,21 +748,30 @@ export default function ConsolePage() {
                 </button>
               )}
               {captureState === "active" && (
-                <button
-                  type="button"
-                  className="btn btn-danger console-capture-btn"
-                  onClick={() => void stopCapture()}
-                >
-                  Stop &amp; end session
-                </button>
+                <div className="capture-btn-group">
+                  <button
+                    type="button"
+                    className="btn btn-ghost console-capture-btn"
+                    onClick={() => void pauseCapture()}
+                  >
+                    Pause
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger console-capture-btn"
+                    onClick={() => void endSession()}
+                  >
+                    End session
+                  </button>
+                </div>
               )}
-              {captureState === "stopping" && (
+              {(captureState === "pausing" || captureState === "stopping") && (
                 <button
                   type="button"
                   className="btn btn-danger console-capture-btn"
                   disabled
                 >
-                  Stopping…
+                  {captureState === "pausing" ? "Pausing…" : "Stopping…"}
                 </button>
               )}
             </div>
@@ -758,6 +803,40 @@ export default function ConsolePage() {
             {session.target_languages.length > 0 &&
               ` · Translations: ${session.target_languages.map((l) => langLabel(l.language_code)).join(", ")}`}
           </p>
+
+          {/* Viewer / listener link */}
+          {session.join_slug && (
+            <div className="viewer-link-row">
+              <span className="ctrl-label">Viewer link</span>
+              <a
+                href={`/l/${session.join_slug}`}
+                target="_blank"
+                rel="noreferrer"
+                className="viewer-link-url"
+                title={`${window.location.origin}/l/${session.join_slug}`}
+              >
+                {`${window.location.origin}/l/${session.join_slug}`}
+              </a>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  const url = `${window.location.origin}/l/${session.join_slug}`;
+                  void navigator.clipboard.writeText(url).then(() => {
+                    setLinkCopied(true);
+                    setTimeout(() => setLinkCopied(false), 2000);
+                  });
+                }}
+              >
+                {linkCopied ? "Copied!" : "Copy link"}
+              </button>
+              {session.join_code && (
+                <span className="join-code-inline text-muted">
+                  or code <strong>{session.join_code}</strong>
+                </span>
+              )}
+            </div>
+          )}
         </section>
 
         {/* ── Transcript / translation panels ── */}
