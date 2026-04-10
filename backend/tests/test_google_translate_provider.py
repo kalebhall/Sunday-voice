@@ -1,4 +1,4 @@
-"""Unit tests for GoogleV3TranslationProvider with mocked HTTP client."""
+"""Unit tests for GoogleTranslationProvider with mocked HTTP client."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 
 from app.providers.google_translate import (
     GoogleTranslationError,
-    GoogleV3TranslationProvider,
+    GoogleTranslationProvider,
 )
 
 
@@ -42,7 +42,7 @@ class FakeCostMeter:
 
 
 def _translate_response(text: str, status: int = 200) -> httpx.Response:
-    body = json.dumps({"translations": [{"translatedText": text}]})
+    body = json.dumps({"data": {"translations": [{"translatedText": text}]}})
     return httpx.Response(status, text=body)
 
 
@@ -79,14 +79,12 @@ def _make_provider(
     cost_meter: FakeCostMeter | None = None,
     max_retries: int = 3,
     backoff_base: float = 0.01,
-) -> GoogleV3TranslationProvider:
+) -> GoogleTranslationProvider:
     client = httpx.AsyncClient(
         transport=transport, base_url="https://translation.googleapis.com"
     )
-    return GoogleV3TranslationProvider(
-        project="test-project",
-        location="global",
-        access_token="fake-token",
+    return GoogleTranslationProvider(
+        api_key="fake-api-key",
         cost_meter=cost_meter,
         max_retries=max_retries,
         backoff_base=backoff_base,
@@ -131,34 +129,36 @@ class TestTranslate:
 
         req = transport.requests[0]
         body = json.loads(req.content.decode())
-        assert body["contents"] == ["Hello"]
-        assert body["sourceLanguageCode"] == "en"
-        assert body["targetLanguageCode"] == "sm"
-        assert body["mimeType"] == "text/plain"
+        assert body["q"] == "Hello"
+        assert body["source"] == "en"
+        assert body["target"] == "sm"
+        assert body["format"] == "text"
 
     @pytest.mark.asyncio
-    async def test_auth_header_sent(self) -> None:
+    async def test_api_key_in_url(self) -> None:
         transport = _MockTransport(translated_text="Kumusta")
         provider = _make_provider(transport)
 
         await provider.translate("Hello", "en", "tl")
 
         req = transport.requests[0]
-        assert req.headers["authorization"] == "Bearer fake-token"
+        assert "key=fake-api-key" in str(req.url)
 
     @pytest.mark.asyncio
-    async def test_url_contains_project_and_location(self) -> None:
+    async def test_url_is_v2_endpoint(self) -> None:
         transport = _MockTransport(translated_text="Hola")
         provider = _make_provider(transport)
 
         await provider.translate("Hello", "en", "es")
 
         req = transport.requests[0]
-        assert "projects/test-project/locations/global" in str(req.url)
+        assert "/language/translate/v2" in str(req.url)
 
     @pytest.mark.asyncio
     async def test_empty_translations_raises(self) -> None:
-        empty_resp = httpx.Response(200, text=json.dumps({"translations": []}))
+        empty_resp = httpx.Response(
+            200, text=json.dumps({"data": {"translations": []}})
+        )
         transport = _MockTransport(responses=[empty_resp])
         provider = _make_provider(transport)
 
@@ -262,12 +262,10 @@ class TestRetryWithBackoff:
 
 
 class TestProtocolConformance:
-    """GoogleV3TranslationProvider satisfies the TranslationProvider protocol."""
+    """GoogleTranslationProvider satisfies the TranslationProvider protocol."""
 
     def test_isinstance_check(self) -> None:
         from app.providers.base import TranslationProvider
 
-        provider = GoogleV3TranslationProvider(
-            project="test", access_token="tok"
-        )
+        provider = GoogleTranslationProvider(api_key="test-key")
         assert isinstance(provider, TranslationProvider)

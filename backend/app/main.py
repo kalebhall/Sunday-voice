@@ -126,17 +126,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Translation fanout — consumes TranscriptEvents and publishes translated
     # segments to Redis pub/sub for listener WebSocket delivery.
-    # Requires GOOGLE_CLOUD_PROJECT to be set; logs a warning if missing.
+    # Requires GOOGLE_TRANSLATE_API_KEY to be set; logs a warning if missing.
     fanout_redis = AsyncRedis.from_url(settings.redis_url, decode_responses=True)
     translation_fanout: TranslationFanout | None = None
 
-    if settings.google_cloud_project:
-        from app.providers.google_translate import GoogleV3TranslationProvider
+    if settings.google_translate_api_key:
+        from app.providers.google_translate import GoogleTranslationProvider
 
-        translate_provider = GoogleV3TranslationProvider(
-            project=settings.google_cloud_project,
-            location=settings.google_translate_location,
-            credentials_file=settings.google_application_credentials or None,
+        translate_provider = GoogleTranslationProvider(
+            api_key=settings.google_translate_api_key,
         )
         tts_svc = getattr(app.state, "tts_service", None)
         translation_fanout = TranslationFanout(
@@ -164,7 +162,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             _log.warning("could not seed translation fanout from DB")
     else:
         _log.warning(
-            "GOOGLE_CLOUD_PROJECT not configured; translation pipeline disabled"
+            "GOOGLE_TRANSLATE_API_KEY not configured; translation pipeline disabled"
         )
 
     app.state.translation_fanout = translation_fanout
