@@ -131,6 +131,9 @@ clone_repo() {
 
     if [[ -d "$APP_DIR/.git" ]]; then
         info "Repository already present – fetching latest on branch '$APP_BRANCH'..."
+        # Fix any ownership drift (e.g. root ran git previously) so APP_USER
+        # can write to .git/FETCH_HEAD and other index files.
+        chown -R "$APP_USER:$APP_USER" "$APP_DIR"
         sudo -u "$APP_USER" git -C "$APP_DIR" fetch origin
         sudo -u "$APP_USER" git -C "$APP_DIR" checkout "$APP_BRANCH"
         sudo -u "$APP_USER" git -C "$APP_DIR" reset --hard "origin/$APP_BRANCH"
