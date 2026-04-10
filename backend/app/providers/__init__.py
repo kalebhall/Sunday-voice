@@ -8,7 +8,7 @@ from app.providers.base import (
 )
 from app.providers.google_translate import (
     GoogleTranslationError,
-    GoogleV3TranslationProvider,
+    GoogleTranslationProvider,
 )
 from app.providers.google_tts import GoogleTTSError, GoogleTTSProvider
 from app.providers.whisper import WhisperAPIProvider, WhisperTranscriptionError
@@ -18,7 +18,7 @@ __all__ = [
     "GoogleTTSError",
     "GoogleTTSProvider",
     "GoogleTranslationError",
-    "GoogleV3TranslationProvider",
+    "GoogleTranslationProvider",
     "TranscriptionProvider",
     "TranslationProvider",
     "TTSProvider",

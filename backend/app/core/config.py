@@ -67,9 +67,7 @@ class Settings(BaseSettings):
     # chunk.  The original 1 MiB default batched ~25 chunks (62 s) — far too
     # large for real-time operation.
     whisper_chunk_flush_bytes: int = 32_768
-    google_application_credentials: str = ""
-    google_cloud_project: str = ""
-    google_translate_location: str = "global"
+    google_translate_api_key: str = ""
     tts_enabled: bool = True
     tts_audio_encoding: str = "MP3"
     tts_voice_overrides: str = ""  # comma-separated "lang=voice" pairs, e.g. "es=es-US-Wavenet-B"
