@@ -124,6 +124,11 @@ create_app_user() {
 # 3. Clone / update repository
 # ---------------------------------------------------------------------------
 clone_repo() {
+    # Git 2.35.2+ rejects operations on directories owned by a different user.
+    # Register the app dir as safe at the system level so both root and
+    # APP_USER can run git commands there without the dubious-ownership error.
+    git config --system --add safe.directory "$APP_DIR"
+
     if [[ -d "$APP_DIR/.git" ]]; then
         info "Repository already present – fetching latest on branch '$APP_BRANCH'..."
         sudo -u "$APP_USER" git -C "$APP_DIR" fetch origin
