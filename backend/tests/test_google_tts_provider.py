@@ -1,4 +1,4 @@
-"""Unit tests for GoogleTTSProvider and TTSCache."""
+"""Unit tests for GoogleTTSProvider, TTSCache, and TTSService."""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ import json
 import tempfile
 import time
 from dataclasses import dataclass
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 from app.providers.google_tts import GoogleTTSError, GoogleTTSProvider
-from app.services.tts import TTSCache, cache_key
+from app.services.tts import TTSCache, TTSService, cache_key
 
 
 # ---------------------------------------------------------------------------
@@ -205,3 +206,46 @@ class TestTTSCache:
 
             ogg_cache = TTSCache(tmpdir, ttl_seconds=3600, audio_encoding="OGG_OPUS")
             assert ogg_cache.content_type == "audio/ogg"
+
+
+# ---------------------------------------------------------------------------
+# TTSService tests
+# ---------------------------------------------------------------------------
+
+
+class TestTTSServiceEviction:
+    def test_evict_expired_delegates_to_cache(self) -> None:
+        """TTSService.evict_expired() proxies to the underlying TTSCache."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache = TTSCache(tmpdir, ttl_seconds=1)
+            service = TTSService(
+                provider=MagicMock(),
+                cache=cache,
+                db_sessionmaker=MagicMock(),
+            )
+
+            key = cache_key("hello", "en")
+            cache.put(key, FAKE_AUDIO)
+
+            # Backdate the meta file so the entry is expired.
+            from pathlib import Path
+            meta = Path(tmpdir) / f"{key}.meta"
+            meta.write_text(str(time.time() - 10))
+
+            removed = service.evict_expired()
+            assert removed == 1
+            assert cache.get(key) is None
+
+    def test_evict_expired_returns_zero_when_nothing_expired(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache = TTSCache(tmpdir, ttl_seconds=3600)
+            service = TTSService(
+                provider=MagicMock(),
+                cache=cache,
+                db_sessionmaker=MagicMock(),
+            )
+
+            key = cache_key("hello", "en")
+            cache.put(key, FAKE_AUDIO)
+
+            assert service.evict_expired() == 0
