@@ -30,6 +30,23 @@ _MAX_RETRIES = 3
 _BACKOFF_BASE_S = 1.0  # 1s, 2s, 4s
 _CHUNK_FLUSH_BYTES = 1 * 1024 * 1024  # flush to API every ~1 MiB of audio
 
+# WebM EBML ID for a Cluster element.  Everything in the bitstream before the
+# first Cluster is the "initialization segment" (EBML header + Segment element
+# containing SeekHead, Info, and Tracks).  Whisper needs this header to parse
+# the audio, but MediaRecorder only includes it in the very first chunk.
+_WEBM_CLUSTER_ID = b"\x1f\x43\xb6\x75"
+
+
+def _webm_init_end(data: bytes) -> int:
+    """Return the byte offset where the WebM initialization segment ends.
+
+    Searches for the first Cluster element (``\\x1f\\x43\\xb6\\x75``) and
+    returns its offset.  If no Cluster is found the entire buffer is treated
+    as initialization data (unusual, but safe).
+    """
+    idx = data.find(_WEBM_CLUSTER_ID)
+    return idx if idx != -1 else len(data)
+
 
 class WhisperAPIProvider:
     """Posts audio chunks to the OpenAI Whisper ``/v1/audio/transcriptions`` endpoint.
@@ -79,19 +96,38 @@ class WhisperAPIProvider:
         audio_stream: AsyncIterator[bytes],
         source_language: str | None = None,
     ) -> AsyncIterator[str]:
-        """Buffer audio chunks and yield transcript segments."""
+        """Buffer audio chunks and yield transcript segments.
+
+        MediaRecorder emits WebM data where only the *first* chunk contains
+        the EBML initialization segment (header + Tracks).  Subsequent chunks
+        are bare Cluster continuation data that Whisper cannot parse on their
+        own.  We extract the initialization segment from the first chunk and
+        prepend it to every buffer that is flushed to the API so that each
+        Whisper request is a valid, self-contained WebM file.
+        """
         buf = io.BytesIO()
+        webm_init: bytes = b""  # EBML header + Segment Info + Tracks (no audio)
 
         async for chunk in audio_stream:
+            if not webm_init:
+                # First chunk: extract initialization segment (everything
+                # before the first Cluster element).
+                init_end = _webm_init_end(chunk)
+                webm_init = chunk[:init_end]
+
             buf.write(chunk)
             if buf.tell() >= self._chunk_flush_bytes:
                 text = await self._transcribe_buffer(buf, source_language)
                 if text:
                     yield text
+                # Start next buffer with the WebM init segment so Whisper can
+                # parse the audio clusters that follow.
                 buf = io.BytesIO()
+                buf.write(webm_init)
 
-        # Flush remaining bytes.
-        if buf.tell() > 0:
+        # Flush remaining bytes (skip if all we have is the init segment with
+        # no actual audio clusters appended yet).
+        if buf.tell() > len(webm_init):
             text = await self._transcribe_buffer(buf, source_language)
             if text:
                 yield text

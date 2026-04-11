@@ -146,9 +146,13 @@ async def _fetch_scrollback(
         return segments
 
     # Target language: read from TranslationSegment rows joined to TranscriptSegment.
+    # selectinload eagerly fetches transcript_segment within the session so we can
+    # access row.transcript_segment attributes after the session closes — async
+    # SQLAlchemy does not support lazy loading outside an active session context.
     async with sessionmaker() as db:
         stmt = (
             select(TranslationSegment)
+            .options(selectinload(TranslationSegment.transcript_segment))
             .where(
                 TranslationSegment.session_id == session_id,
                 TranslationSegment.language_code == lang,
@@ -299,15 +303,11 @@ async def listener_ws(
             )
 
             while True:
-                try:
-                    msg = await asyncio.wait_for(
-                        pubsub.get_message(
-                            ignore_subscribe_messages=True, timeout=1.0
-                        ),
-                        timeout=heartbeat_interval,
-                    )
-                except asyncio.TimeoutError:
-                    msg = None
+                # Block up to heartbeat_interval seconds waiting for a message.
+                # Returns None when the timeout expires so we can send a keepalive.
+                msg = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=heartbeat_interval
+                )
 
                 # Check if the client disconnected.
                 if recv_task.done():
