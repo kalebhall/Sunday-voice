@@ -117,6 +117,7 @@ export default function ConsolePage() {
   const speechRecogRef = useRef<SpeechRecognition | null>(null);
   const listenerWsMap = useRef<Map<string, WebSocket>>(new Map());
   const lastSeqMap = useRef<Map<string, number>>(new Map());
+  const reconnectDelayMap = useRef<Map<string, number>>(new Map());
   const panelRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const sessionRef = useRef<SessionOut | null>(null);
 
@@ -566,6 +567,7 @@ export default function ConsolePage() {
       lastSeq,
       () => {
         if (!mountedRef.current) return;
+        reconnectDelayMap.current.set(lang, 2000);
         setLangWsState((prev) => new Map(prev).set(lang, "open"));
       },
       (seg) => {
@@ -577,16 +579,18 @@ export default function ConsolePage() {
         addSegment(lang, seg);
       },
       () => {
-        // onclose: auto-reconnect
+        // onclose: auto-reconnect with exponential backoff
         if (!mountedRef.current) return;
         listenerWsMap.current.delete(lang);
         setLangWsState((prev) => new Map(prev).set(lang, "closed"));
         const sess = sessionRef.current;
         if (sess && sess.status !== "ended") {
+          const delay = reconnectDelayMap.current.get(lang) ?? 2000;
+          reconnectDelayMap.current.set(lang, Math.min(delay * 2, 30_000));
           setTimeout(() => {
             if (!mountedRef.current) return;
             connectListenerWsRef.current(lang, joinCode);
-          }, 2000);
+          }, delay);
         }
       },
       () => {
