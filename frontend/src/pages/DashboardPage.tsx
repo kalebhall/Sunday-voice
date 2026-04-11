@@ -3,19 +3,9 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import api from "../api/client";
 import type { components } from "../api/schema";
+import { langLabel } from "../languages";
 
 type SessionOut = components["schemas"]["SessionOut"];
-
-const LANG_NAMES: Record<string, string> = {
-  en: "English",
-  es: "Spanish",
-  to: "Tongan",
-  tl: "Tagalog",
-};
-
-function langLabel(code: string): string {
-  return LANG_NAMES[code] ?? code;
-}
 
 function statusBadgeClass(status: string): string {
   if (status === "active") return "badge badge-active";

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import api, { getAccessToken } from "../api/client";
 import type { components } from "../api/schema";
+import { SPEECH_LANG_TAG, langLabel } from "../languages";
 
 // Web Speech API is not yet in lib.dom.d.ts for all envs; declare minimally.
 declare global {
@@ -20,25 +21,7 @@ interface Segment {
 
 type CaptureState = "idle" | "starting" | "active" | "pausing" | "stopping" | "error";
 
-// BCP-47 language tag mapping for Web Speech API
-const SPEECH_LANG_TAG: Record<string, string> = {
-  en: "en-US",
-  es: "es-US",
-  to: "to-TO",
-  tl: "fil-PH",
-};
 type WsState = "connecting" | "open" | "closed" | "error";
-
-const LANG_NAMES: Record<string, string> = {
-  en: "English",
-  es: "Spanish",
-  to: "Tongan",
-  tl: "Tagalog",
-};
-
-function langLabel(code: string): string {
-  return LANG_NAMES[code] ?? code;
-}
 
 function wsBaseUrl(): string {
   return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;

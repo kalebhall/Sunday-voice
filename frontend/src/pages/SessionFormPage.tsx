@@ -3,15 +3,9 @@ import type { FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import api from "../api/client";
 import type { components } from "../api/schema";
+import { SUPPORTED_LANGUAGES } from "../languages";
 
 type LanguageConfig = components["schemas"]["LanguageConfig"];
-
-const SUPPORTED_LANGUAGES = [
-  { code: "en", name: "English" },
-  { code: "es", name: "Spanish" },
-  { code: "to", name: "Tongan" },
-  { code: "tl", name: "Tagalog" },
-];
 
 export default function SessionFormPage() {
   const { id } = useParams<{ id?: string }>();
