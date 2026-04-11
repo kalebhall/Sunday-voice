@@ -43,7 +43,7 @@ If session is not started yet, show a waiting state.
   down) directly in the UI.
 - Feedback is stored as anonymized metadata (session id, target language,
   segment id, timestamp) and survives the 48-hour content purge so admins can
-  review quality trends, especially for Samoan and Tagalog.
+  review quality trends, especially for Tongan and Tagalog.
 
 ## Supported Browsers
 

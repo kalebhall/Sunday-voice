@@ -3,7 +3,7 @@
 ## Transcription
 
 - **MVP default**: OpenAI Whisper API
-  - Pros: supports English, Spanish, Samoan, Tagalog; good accuracy; no GPU required.
+  - Pros: supports English, Spanish, Tongan, Tagalog; good accuracy; no GPU required.
   - Cons: audio leaves your server; cost per minute.
 
 - **Future option**: Self-hosted Whisper
@@ -18,19 +18,19 @@
 ## Translation
 
 - **MVP default**: Google Cloud Translation API (v3).
-  - Pros: broadest coverage including Samoan and Tagalog; single vendor billing
+  - Pros: broadest coverage including Tongan and Tagalog; single vendor billing
     alongside TTS; predictable latency; mature client libraries.
   - Cons: text leaves your server; per-character cost.
 - Interface allows:
   - Multiple providers.
   - Fallback order.
-- Samoan quality validation:
+- Tongan quality validation:
   - Ship with Google Cloud Translation as the default.
   - Collect in-product thumbs-down feedback per segment to measure real-world
-    quality, especially for Samoan and Tagalog. Revisit provider choice after
+    quality, especially for Tongan and Tagalog. Revisit provider choice after
     field data.
 - Future:
-  - Evaluate quality for Samoan/Tagalog.
+  - Evaluate quality for Tongan/Tagalog.
   - Consider self-hosted models if quality and latency acceptable.
 
 ## TTS

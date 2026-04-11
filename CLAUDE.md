@@ -14,7 +14,7 @@ on their own devices.
 
 - Primary deployment: single stake instance on an Ubuntu LXC on Proxmox.
 - Scale target: 3–5 concurrent sessions, up to ~100 listeners per session.
-- Target languages: English, Spanish, Samoan, Tagalog.
+- Target languages: English, Spanish, Tongan, Tagalog.
 - Target latency: 2–3 seconds end-to-end.
 
 ## Source of truth

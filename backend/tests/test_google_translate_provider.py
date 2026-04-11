@@ -125,13 +125,13 @@ class TestTranslate:
         transport = _MockTransport(translated_text="Talofa")
         provider = _make_provider(transport)
 
-        await provider.translate("Hello", "en", "sm")
+        await provider.translate("Hello", "en", "to")
 
         req = transport.requests[0]
         body = json.loads(req.content.decode())
         assert body["q"] == "Hello"
         assert body["source"] == "en"
-        assert body["target"] == "sm"
+        assert body["target"] == "to"
         assert body["format"] == "text"
 
     @pytest.mark.asyncio

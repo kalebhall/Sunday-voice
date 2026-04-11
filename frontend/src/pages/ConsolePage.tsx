@@ -24,7 +24,7 @@ type CaptureState = "idle" | "starting" | "active" | "pausing" | "stopping" | "e
 const SPEECH_LANG_TAG: Record<string, string> = {
   en: "en-US",
   es: "es-US",
-  sm: "sm-WS",
+  to: "to-TO",
   tl: "fil-PH",
 };
 type WsState = "connecting" | "open" | "closed" | "error";
@@ -32,7 +32,7 @@ type WsState = "connecting" | "open" | "closed" | "error";
 const LANG_NAMES: Record<string, string> = {
   en: "English",
   es: "Spanish",
-  sm: "Samoan",
+  to: "Tongan",
   tl: "Tagalog",
 };
 
