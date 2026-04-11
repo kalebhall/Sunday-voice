@@ -26,7 +26,7 @@ _BACKOFF_BASE_S = 0.5
 _DEFAULT_VOICES: dict[str, str] = {
     "en": "en-US-Standard-C",
     "es": "es-US-Standard-A",
-    "sm": "sm-Standard-A",
+    "to": "to-Standard-A",
     "tl": "fil-PH-Standard-A",
 }
 

@@ -9,7 +9,7 @@ type SessionOut = components["schemas"]["SessionOut"];
 const LANG_NAMES: Record<string, string> = {
   en: "English",
   es: "Spanish",
-  sm: "Samoan",
+  to: "Tongan",
   tl: "Tagalog",
 };
 

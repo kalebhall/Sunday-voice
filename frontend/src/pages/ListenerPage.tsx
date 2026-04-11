@@ -59,7 +59,7 @@ type Phase =
 const LANG_NAMES: Record<string, string> = {
   en: "English",
   es: "Spanish",
-  sm: "Samoan",
+  to: "Tongan",
   tl: "Tagalog",
   fr: "French",
   pt: "Portuguese",

@@ -2,7 +2,7 @@
 
 A self-hosted, real-time translation web app for in-building ward and stake meetings. An operator captures audio, the system transcribes and translates it, and listeners view (and optionally hear) the translated output on their own devices.
 
-**Target languages:** English, Spanish, Samoan, Tagalog  
+**Target languages:** English, Spanish, Tongan, Tagalog  
 **Target latency:** 2–3 seconds end-to-end  
 **Scale:** 3–5 concurrent sessions, up to ~100 listeners per session
 

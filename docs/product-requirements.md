@@ -10,7 +10,7 @@ The first deployment is a single stake instance on a personal Ubuntu server (LXC
 
 - Support ward and stake meetings first, and be usable for other in-building meetings.
 - Provide near real-time transcription and translation with roughly 2–3 seconds of end-to-end latency.
-- Support English, Spanish, Samoan, and Tagalog, including multiple target languages simultaneously in one session.
+- Support English, Spanish, Tongan, and Tagalog, including multiple target languages simultaneously in one session.
 - Provide both text display and optional spoken playback (TTS) per listener.
 - Allow anonymous listener access using expiring links / codes (no login).
 - Minimize data retention: delete audio and transcript content after 48 hours while keeping statistical data.
@@ -53,7 +53,7 @@ The first deployment is a single stake instance on a personal Ubuntu server (LXC
 
 1. **Sacrament Meeting Translation**
    - Operator at sound desk captures chapel audio.
-   - Sunday Voice provides live translated text in Spanish and Samoan on member phones and in an overflow room presentation mode.
+   - Sunday Voice provides live translated text in Spanish and Tongan on member phones and in an overflow room presentation mode.
 
 2. **Stake Conference**
    - Multiple sessions (e.g., adult session, general session) configured and pre-scheduled.
@@ -100,7 +100,7 @@ The first deployment is a single stake instance on a personal Ubuntu server (LXC
 - Translate from detected/source language into:
   - English
   - Spanish
-  - Samoan
+  - Tongan
   - Tagalog
 - Support multiple simultaneous target languages in the same session.
 - Allow operator to enable/disable which target languages are exposed per session.

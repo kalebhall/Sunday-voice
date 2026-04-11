@@ -9,7 +9,7 @@ type LanguageConfig = components["schemas"]["LanguageConfig"];
 const SUPPORTED_LANGUAGES = [
   { code: "en", name: "English" },
   { code: "es", name: "Spanish" },
-  { code: "sm", name: "Samoan" },
+  { code: "to", name: "Tongan" },
   { code: "tl", name: "Tagalog" },
 ];
 

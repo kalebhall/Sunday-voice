@@ -98,7 +98,7 @@ def test_create_session_full(client: TestClient, operator: User) -> None:
             "audio_transport": "webrtc",
             "target_languages": [
                 {"language_code": "es", "tts_enabled": True},
-                {"language_code": "sm", "tts_enabled": False},
+                {"language_code": "to", "tts_enabled": False},
             ],
             "scheduled_at": "2026-04-06T10:00:00Z",
         },
