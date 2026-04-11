@@ -10,6 +10,10 @@ Group=sundayvoice
 WorkingDirectory=/opt/sunday-voice/frontend
 # HOME must point somewhere writable so npm can resolve its cache.
 Environment=HOME=/opt/sunday-voice
+# Reset node_modules ownership before npm ci in case a previous run wrote it
+# as root (or another user), which would cause EACCES on unlink.
+# The leading '+' runs this step as root regardless of User= above.
+ExecStartPre=+/bin/bash -c 'test -d /opt/sunday-voice/frontend/node_modules && chown -R sundayvoice:sundayvoice /opt/sunday-voice/frontend/node_modules || true'
 # npm ci installs from the lockfile; npm run build writes to frontend/dist.
 ExecStart=/usr/bin/npm ci --prefer-offline
 ExecStart=/usr/bin/npm run build
