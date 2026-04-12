@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
+import { langLabel } from "../languages";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,25 +45,6 @@ type FontSize = "sm" | "md" | "lg" | "xl";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const LANG_NAMES: Record<string, string> = {
-  en: "English",
-  es: "Spanish",
-  to: "Tongan",
-  tl: "Tagalog",
-  fr: "French",
-  pt: "Portuguese",
-  zh: "Chinese",
-  ja: "Japanese",
-  ko: "Korean",
-  ar: "Arabic",
-  ru: "Russian",
-  de: "German",
-  it: "Italian",
-};
-
-function langLabel(code: string): string {
-  return LANG_NAMES[code] ?? code.toUpperCase();
-}
 
 function wsBaseUrl(): string {
   return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
