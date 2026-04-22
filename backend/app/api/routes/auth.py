@@ -1,11 +1,12 @@
-"""Authentication endpoints: login, refresh, and current user."""
+"""Authentication endpoints: login, refresh, logout, and current user."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +17,7 @@ from app.api.deps import (
     get_login_rate_limiter,
 )
 from app.core.audit import write_audit_log
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.rate_limit import SlidingWindowRateLimiter
 from app.core.security import (
     TokenError,
@@ -26,16 +27,36 @@ from app.core.security import (
     verify_password,
 )
 from app.models import User
-from app.schemas.auth import LoginRequest, MeResponse, RefreshRequest, TokenResponse
+from app.schemas.auth import LoginRequest, MeResponse, TokenResponse
 
 router = APIRouter()
 
 
-def _token_response(user: User) -> TokenResponse:
-    settings = get_settings()
+def _set_refresh_cookie(response: Response, token: str, settings: Settings) -> None:
+    response.set_cookie(
+        key=settings.refresh_cookie_name,
+        value=token,
+        max_age=settings.jwt_refresh_token_ttl_days * 24 * 60 * 60,
+        httponly=True,
+        secure=settings.refresh_cookie_secure,
+        samesite="strict",
+        path=settings.refresh_cookie_path,
+    )
+
+
+def _clear_refresh_cookie(response: Response, settings: Settings) -> None:
+    # Match the Path used at set time so the browser actually clears it.
+    response.delete_cookie(
+        key=settings.refresh_cookie_name,
+        path=settings.refresh_cookie_path,
+    )
+
+
+def _issue_tokens(user: User, response: Response, settings: Settings) -> TokenResponse:
+    """Issue a new access token in the body and a fresh refresh cookie."""
+    _set_refresh_cookie(response, create_refresh_token(user_id=user.id), settings)
     return TokenResponse(
         access_token=create_access_token(user_id=user.id, role=user.role.name),
-        refresh_token=create_refresh_token(user_id=user.id),
         expires_in=settings.jwt_access_token_ttl_minutes * 60,
     )
 
@@ -50,9 +71,11 @@ async def _load_user_with_role(db: AsyncSession, user_id: int) -> User | None:
 async def login(
     payload: LoginRequest,
     request: Request,
+    response: Response,
     db: DbSession,
     limiter: Annotated[SlidingWindowRateLimiter, Depends(get_login_rate_limiter)],
 ) -> TokenResponse:
+    settings = get_settings()
     # Rate limit keyed by (client, email) so one attacker cycling emails and
     # one attacker focused on one email are both throttled.
     ident = client_identifier(request)
@@ -112,36 +135,54 @@ async def login(
     await db.commit()
     await db.refresh(user)
 
-    return _token_response(user)
+    return _issue_tokens(user, response, settings)
+
+
+def _refresh_unauthorized(settings: Settings, *, clear_cookie: bool) -> JSONResponse:
+    # HTTPException raised from inside the endpoint discards any Set-Cookie we
+    # queued on the injected Response, so for the "bad cookie" path we return
+    # a JSONResponse directly to keep the clear-cookie side effect.
+    resp = JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content={"detail": "invalid refresh token"},
+    )
+    if clear_cookie:
+        _clear_refresh_cookie(resp, settings)
+    return resp
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(payload: RefreshRequest, db: DbSession) -> TokenResponse:
+async def refresh(
+    request: Request, response: Response, db: DbSession
+) -> TokenResponse | JSONResponse:
+    settings = get_settings()
+    cookie_token = request.cookies.get(settings.refresh_cookie_name)
+    if not cookie_token:
+        return _refresh_unauthorized(settings, clear_cookie=False)
+
     try:
-        claims = decode_token(payload.refresh_token, expected_type="refresh")
-    except TokenError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
-        ) from exc
+        claims = decode_token(cookie_token, expected_type="refresh")
+    except TokenError:
+        return _refresh_unauthorized(settings, clear_cookie=True)
 
     try:
         user_id = int(claims["sub"])
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid token subject",
-        ) from exc
+    except (TypeError, ValueError):
+        return _refresh_unauthorized(settings, clear_cookie=True)
 
     user = await _load_user_with_role(db, user_id)
     if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="user not found or disabled",
-        )
+        return _refresh_unauthorized(settings, clear_cookie=True)
     write_audit_log(db, action="auth.token_refresh", actor_user_id=user.id)
     await db.commit()
-    return _token_response(user)
+    return _issue_tokens(user, response, settings)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(response: Response) -> Response:
+    _clear_refresh_cookie(response, get_settings())
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 @router.get("/me", response_model=MeResponse)

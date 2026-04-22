@@ -24,7 +24,7 @@ from app.api.deps import reset_login_rate_limiter
 from app.core.config import get_settings
 from app.db.session import get_session
 from app.main import app
-from app.models import Role, Session, SessionLanguage, User
+from app.models import AuditLog, Role, Session, SessionLanguage, User
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +46,7 @@ async def db_sessionmaker() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     """
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with engine.begin() as conn:
-        for tbl in (Role, User, Session, SessionLanguage):
+        for tbl in (Role, User, Session, SessionLanguage, AuditLog):
             await conn.run_sync(
                 lambda sync_conn, t=tbl: t.__table__.create(sync_conn, checkfirst=True)
             )

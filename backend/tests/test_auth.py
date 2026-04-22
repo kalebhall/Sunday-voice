@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import CurrentUser, require_role, reset_login_rate_limiter
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.rate_limit import SlidingWindowRateLimiter
 from app.core.security import (
     TokenError,
@@ -152,11 +152,71 @@ def test_login_success(client: TestClient, admin_user: User) -> None:
     body = resp.json()
     assert body["token_type"] == "bearer"
     assert body["expires_in"] > 0
-    assert body["access_token"] and body["refresh_token"]
+    assert body["access_token"]
+    # Refresh token is delivered as an HttpOnly cookie, not in the body.
+    assert "refresh_token" not in body
+    settings = get_settings()
+    cookie = resp.cookies.get(settings.refresh_cookie_name)
+    assert cookie, "refresh cookie should be set on login"
+    refresh_claims = decode_token(cookie, expected_type="refresh")
+    assert refresh_claims["sub"] == str(admin_user.id)
     # Token should carry the role claim.
     claims = decode_token(body["access_token"], expected_type="access")
     assert claims["role"] == "admin"
     assert claims["sub"] == str(admin_user.id)
+
+
+def _cookie_attrs(resp, name: str) -> dict[str, str]:
+    """Parse the Set-Cookie header for *name* into a flag dict."""
+    for header in resp.headers.get_list("set-cookie"):
+        if header.split("=", 1)[0].strip().lower() == name.lower():
+            parts = [p.strip() for p in header.split(";")]
+            attrs: dict[str, str] = {}
+            for part in parts[1:]:
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    attrs[k.strip().lower()] = v.strip()
+                else:
+                    attrs[part.lower()] = ""
+            return attrs
+    return {}
+
+
+def test_login_sets_secure_cookie_flags(
+    client: TestClient, admin_user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Force a prod-like environment so the Secure flag is asserted.
+    monkeypatch.setenv("APP_ENV", "production")
+    get_settings.cache_clear()
+    reset_login_rate_limiter()
+    resp = client.post(
+        "/api/auth/login",
+        json={"email": "admin@example.com", "password": "correct-horse-battery"},
+    )
+    assert resp.status_code == 200, resp.text
+    settings = get_settings()
+    attrs = _cookie_attrs(resp, settings.refresh_cookie_name)
+    assert "httponly" in attrs
+    assert "secure" in attrs
+    assert attrs.get("samesite", "").lower() == "strict"
+    assert attrs.get("path") == settings.refresh_cookie_path
+
+
+def test_login_cookie_not_secure_in_development(
+    client: TestClient, admin_user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("APP_ENV", "development")
+    get_settings.cache_clear()
+    reset_login_rate_limiter()
+    resp = client.post(
+        "/api/auth/login",
+        json={"email": "admin@example.com", "password": "correct-horse-battery"},
+    )
+    assert resp.status_code == 200, resp.text
+    attrs = _cookie_attrs(resp, get_settings().refresh_cookie_name)
+    # HttpOnly and SameSite must still be set; Secure is relaxed.
+    assert "httponly" in attrs
+    assert "secure" not in attrs
 
 
 def test_login_wrong_password(client: TestClient, admin_user: User) -> None:
@@ -269,37 +329,84 @@ def test_login_validation_error_on_missing_fields(client: TestClient) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _settings() -> Settings:
+    return get_settings()
+
+
 def test_refresh_success(client: TestClient, operator_user: User) -> None:
     login = client.post(
         "/api/auth/login",
         json={"email": "op@example.com", "password": "another-strong-pass"},
     )
-    refresh_token = login.json()["refresh_token"]
-
-    resp = client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
-    assert resp.status_code == 200
+    assert login.status_code == 200, login.text
+    # TestClient carries the cookie over automatically; /refresh needs no body.
+    resp = client.post("/api/auth/refresh")
+    assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["access_token"] and body["refresh_token"]
+    assert body["access_token"]
+    assert "refresh_token" not in body
+    # Rotation: a fresh refresh cookie is issued on every successful refresh.
+    rotated = resp.cookies.get(_settings().refresh_cookie_name)
+    assert rotated, "refresh should rotate the cookie"
     claims = decode_token(body["access_token"], expected_type="access")
     assert claims["role"] == "operator"
     assert claims["sub"] == str(operator_user.id)
 
 
+def test_refresh_without_cookie_is_rejected(client: TestClient) -> None:
+    resp = client.post("/api/auth/refresh")
+    assert resp.status_code == 401
+
+
 def test_refresh_rejects_access_token(client: TestClient, admin_user: User) -> None:
     access = create_access_token(user_id=admin_user.id, role="admin")
-    resp = client.post("/api/auth/refresh", json={"refresh_token": access})
+    resp = client.post(
+        "/api/auth/refresh",
+        cookies={_settings().refresh_cookie_name: access},
+    )
     assert resp.status_code == 401
 
 
 def test_refresh_rejects_unknown_user(client: TestClient) -> None:
     tok = create_refresh_token(user_id=999_999)
-    resp = client.post("/api/auth/refresh", json={"refresh_token": tok})
+    resp = client.post(
+        "/api/auth/refresh",
+        cookies={_settings().refresh_cookie_name: tok},
+    )
     assert resp.status_code == 401
 
 
 def test_refresh_rejects_garbage(client: TestClient) -> None:
-    resp = client.post("/api/auth/refresh", json={"refresh_token": "abc"})
+    resp = client.post(
+        "/api/auth/refresh",
+        cookies={_settings().refresh_cookie_name: "abc"},
+    )
     assert resp.status_code == 401
+    # Bad cookie should be instructed to clear so the browser stops resending.
+    attrs = _cookie_attrs(resp, _settings().refresh_cookie_name)
+    assert attrs, "response should include a Set-Cookie to clear the bad cookie"
+
+
+# --------------------------------------------------------------------------- #
+# /api/auth/logout
+# --------------------------------------------------------------------------- #
+
+
+def test_logout_clears_cookie(client: TestClient, admin_user: User) -> None:
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "admin@example.com", "password": "correct-horse-battery"},
+    )
+    assert login.status_code == 200
+    name = _settings().refresh_cookie_name
+    assert login.cookies.get(name)
+
+    resp = client.post("/api/auth/logout")
+    assert resp.status_code == 204
+    # After logout the browser no longer holds a valid refresh cookie, so
+    # /refresh should fail.
+    client.cookies.delete(name)
+    assert client.post("/api/auth/refresh").status_code == 401
 
 
 # --------------------------------------------------------------------------- #

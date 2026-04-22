@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     jwt_access_token_ttl_minutes: int = 60
     jwt_refresh_token_ttl_days: int = 14
 
+    # Refresh-token cookie. The refresh token is stored in an HttpOnly cookie
+    # so it survives a page refresh without being readable from JavaScript.
+    # `Secure` is auto-derived from app_env: off in development (HTTP on
+    # localhost), on everywhere else. `SameSite=Strict` is safe because the
+    # frontend is served by this same backend (same origin in production, and
+    # proxied by Vite in dev).
+    refresh_cookie_name: str = "sv_refresh"
+    refresh_cookie_path: str = "/api/auth"
+
     # Login throttling (sliding window per client+email).
     login_rate_limit_max_attempts: int = 10
     login_rate_limit_window_seconds: float = 60.0
@@ -98,6 +107,13 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.app_cors_origins.split(",") if o.strip()]
+
+    @property
+    def refresh_cookie_secure(self) -> bool:
+        # Browsers reject Secure cookies on plain HTTP, which breaks the
+        # localhost dev server and the in-process TestClient. Everywhere
+        # else, require HTTPS.
+        return self.app_env not in {"development", "test"}
 
 
 @lru_cache(maxsize=1)

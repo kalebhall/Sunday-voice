@@ -7,7 +7,11 @@ import {
   useState,
 } from "react";
 import type { ReactNode } from "react";
-import api, { clearTokens, hasTokens, setTokens } from "../api/client";
+import api, {
+  clearAccessToken,
+  setAccessToken,
+  tryRefresh,
+} from "../api/client";
 import type { components } from "../api/schema";
 
 type User = components["schemas"]["MeResponse"];
@@ -15,12 +19,12 @@ type User = components["schemas"]["MeResponse"];
 interface AuthState {
   /** Current authenticated user, or null if not logged in. */
   user: User | null;
-  /** True while the initial /me probe is in-flight. */
+  /** True while the initial refresh/hydrate probe is in-flight. */
   loading: boolean;
   /** Login with email + password. Throws on failure. */
   login: (email: string, password: string) => Promise<void>;
   /** Clear tokens and reset state. */
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -29,25 +33,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  /** Fetch /me using the current access token. */
   const fetchMe = useCallback(async () => {
     const { data } = await api.GET("/api/auth/me");
     if (data) {
       setUser(data);
     } else {
-      clearTokens();
+      clearAccessToken();
       setUser(null);
     }
   }, []);
 
-  // On mount: if we somehow have tokens (shouldn't normally — memory-only),
-  // try to hydrate user. Otherwise mark loading done immediately.
+  // On mount, ask the server to exchange the refresh cookie for a new
+  // access token. If the cookie is missing/expired the call 401s and we
+  // fall through to the login page — no token state survives in JS, so
+  // a page refresh looks like any other cold start from the client side.
   useEffect(() => {
-    if (hasTokens()) {
-      fetchMe().finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
+    let cancelled = false;
+    (async () => {
+      const ok = await tryRefresh();
+      if (cancelled) return;
+      if (ok) {
+        await fetchMe();
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [fetchMe]);
 
   const login = useCallback(
@@ -62,14 +74,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           "Login failed";
         throw new Error(detail);
       }
-      setTokens(data.access_token, data.refresh_token, data.expires_in);
+      setAccessToken(data.access_token, data.expires_in);
       await fetchMe();
     },
     [fetchMe],
   );
 
-  const logout = useCallback(() => {
-    clearTokens();
+  const logout = useCallback(async () => {
+    // Best-effort: clear server-side cookie, then drop in-memory state.
+    try {
+      await api.POST("/api/auth/logout");
+    } catch {
+      // Network error — we still want to forget the user locally.
+    }
+    clearAccessToken();
     setUser(null);
   }, []);
 
