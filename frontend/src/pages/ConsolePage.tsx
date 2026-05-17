@@ -86,6 +86,9 @@ export default function ConsolePage() {
   // ----- Viewer link copy state -----
   const [linkCopied, setLinkCopied] = useState(false);
 
+  // ----- WS reconnect state -----
+  const [wsReconnecting, setWsReconnecting] = useState(false);
+
   // ----- Refs -----
   const mountedRef = useRef(true);
   const captureActiveRef = useRef(false);
@@ -103,6 +106,9 @@ export default function ConsolePage() {
   const reconnectDelayMap = useRef<Map<string, number>>(new Map());
   const panelRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const sessionRef = useRef<SessionOut | null>(null);
+  const wsRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsRetryDelayRef = useRef<number>(2000);
+  const fallbackWsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -120,6 +126,8 @@ export default function ConsolePage() {
       peerConnRef.current?.close();
       if (recorderRef.current?.state !== "inactive") recorderRef.current?.stop();
       speechRecogRef.current?.stop();
+      if (wsRetryTimerRef.current) clearTimeout(wsRetryTimerRef.current);
+      fallbackWsRef.current?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -208,53 +216,159 @@ export default function ConsolePage() {
     }
   }
 
-  // ----- WebSocket chunks capture -----
-  function startWsChunksCapture(stream: MediaStream, sessionId: string) {
+  // ----- WS retry / fallback helpers -----
+  function clearWsRetry() {
+    if (wsRetryTimerRef.current) {
+      clearTimeout(wsRetryTimerRef.current);
+      wsRetryTimerRef.current = null;
+    }
+  }
+
+  function stopWsFallback() {
+    speechRecogRef.current?.stop();
+    speechRecogRef.current = null;
+    fallbackWsRef.current?.close();
+    fallbackWsRef.current = null;
+  }
+
+  // Starts Web Speech → /transcript WebSocket as a fallback while audio WS retries.
+  function startWsChunksFallback(sessionId: string, sourceLanguage: string) {
+    const SpeechRecognitionCtor =
+      window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) return;
+
+    const token = getAccessToken();
+    if (!token) return;
+
+    const wsUrl = `${wsBaseUrl()}/ws/operator/${sessionId}/transcript?token=${encodeURIComponent(token)}`;
+    const ws = new WebSocket(wsUrl);
+    fallbackWsRef.current = ws;
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = SPEECH_LANG_TAG[sourceLanguage] ?? sourceLanguage;
+    speechRecogRef.current = recognition;
+
+    ws.onopen = () => {
+      if (!mountedRef.current || !captureActiveRef.current || fallbackWsRef.current !== ws) {
+        ws.close();
+        return;
+      }
+      recognition.start();
+    };
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (!result.isFinal) continue;
+        const text = result[0].transcript.trim();
+        if (text) ws.send(JSON.stringify({ text, language: sourceLanguage }));
+      }
+    };
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      if (event.error === "no-speech" || event.error === "audio-capture") return;
+      // Other errors are silent — audio WS retry is already scheduled.
+    };
+
+    recognition.onend = () => {
+      if (captureActiveRef.current && mountedRef.current && fallbackWsRef.current === ws) {
+        try { recognition.start(); } catch { /* ignore */ }
+      }
+    };
+
+    ws.onerror = () => { /* Fallback WS errors are silent while audio WS retries. */ };
+    ws.onclose = () => {
+      if (fallbackWsRef.current === ws) {
+        speechRecogRef.current?.stop();
+        speechRecogRef.current = null;
+        fallbackWsRef.current = null;
+      }
+    };
+  }
+
+  // ----- WebSocket chunks capture (with automatic fallback + reconnect) -----
+  function startWsChunksCapture(
+    stream: MediaStream,
+    sessionId: string,
+    sourceLanguage: string,
+  ) {
     const token = getAccessToken();
     if (!token) throw new Error("Not authenticated");
 
-    const wsUrl = `${wsBaseUrl()}/ws/operator/${sessionId}/audio?token=${encodeURIComponent(token)}`;
-    const ws = new WebSocket(wsUrl);
-    ws.binaryType = "arraybuffer";
-    operatorWsRef.current = ws;
+    wsRetryDelayRef.current = 2000;
 
-    ws.onopen = () => {
-      if (!mountedRef.current) { ws.close(); return; }
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType });
-      recorderRef.current = recorder;
+    function attemptConnect() {
+      if (!mountedRef.current || !captureActiveRef.current) return;
+      const currentToken = getAccessToken();
+      if (!currentToken) return;
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-          ws.send(e.data);
-        }
+      const wsUrl = `${wsBaseUrl()}/ws/operator/${sessionId}/audio?token=${encodeURIComponent(currentToken)}`;
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
+      operatorWsRef.current = ws;
+
+      ws.onopen = () => {
+        if (!mountedRef.current || !captureActiveRef.current) { ws.close(); return; }
+
+        // Reconnected: tear down fallback and resume sending audio chunks.
+        stopWsFallback();
+        clearWsRetry();
+        wsRetryDelayRef.current = 2000;
+        setWsReconnecting(false);
+
+        const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
+          : "audio/webm";
+        const recorder = new MediaRecorder(stream, { mimeType });
+        recorderRef.current = recorder;
+
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+            ws.send(e.data);
+          }
+        };
+        recorder.onerror = () => {
+          if (!mountedRef.current) return;
+          clearWsRetry();
+          stopWsFallback();
+          setCaptureError("MediaRecorder error");
+          setCaptureState("error");
+          captureActiveRef.current = false;
+        };
+        recorder.start(2000); // 2-second chunks
       };
-      recorder.onerror = () => {
-        if (!mountedRef.current) return;
-        setCaptureError("MediaRecorder error");
-        setCaptureState("error");
-        captureActiveRef.current = false;
+
+      const onDisconnect = () => {
+        if (!mountedRef.current || !captureActiveRef.current) return;
+        if (operatorWsRef.current !== ws) return;
+
+        // Stop the recorder but keep the stream alive for fallback mic access.
+        if (recorderRef.current?.state !== "inactive") recorderRef.current?.stop();
+        recorderRef.current = null;
+        operatorWsRef.current = null;
+
+        // Activate browser fallback and schedule a reconnect attempt.
+        clearWsRetry();
+        stopWsFallback();
+        setWsReconnecting(true);
+        startWsChunksFallback(sessionId, sourceLanguage);
+
+        const delay = wsRetryDelayRef.current;
+        wsRetryDelayRef.current = Math.min(delay * 2, 30_000);
+        wsRetryTimerRef.current = setTimeout(attemptConnect, delay);
       };
-      recorder.start(2000); // 2-second chunks
-    };
 
-    ws.onerror = () => {
-      if (!mountedRef.current) return;
-      setCaptureError("Audio WebSocket connection error");
-      setCaptureState("error");
-      captureActiveRef.current = false;
-    };
+      ws.onerror = () => { /* onclose fires immediately after; handle reconnect there. */ };
+      ws.onclose = (ev) => {
+        if (!mountedRef.current || !captureActiveRef.current || ev.wasClean) return;
+        onDisconnect();
+      };
+    }
 
-    ws.onclose = (ev) => {
-      if (!mountedRef.current) return;
-      if (captureActiveRef.current && !ev.wasClean) {
-        setCaptureError("Audio connection lost — click Retry to reconnect");
-        setCaptureState("error");
-        captureActiveRef.current = false;
-      }
-    };
+    attemptConnect();
   }
 
   // ----- WebRTC capture -----
@@ -436,7 +550,7 @@ export default function ConsolePage() {
         if (activeSession.audio_transport === "webrtc") {
           await startWebRTCCapture(stream, id);
         } else {
-          startWsChunksCapture(stream, id);
+          startWsChunksCapture(stream, id, activeSession.source_language);
         }
       }
 
@@ -468,6 +582,10 @@ export default function ConsolePage() {
     setCaptureState("pausing");
     captureActiveRef.current = false;
 
+    clearWsRetry();
+    stopWsFallback();
+    setWsReconnecting(false);
+
     if (recorderRef.current?.state !== "inactive") recorderRef.current?.stop();
     recorderRef.current = null;
 
@@ -489,6 +607,10 @@ export default function ConsolePage() {
   async function endSession() {
     setCaptureState("stopping");
     captureActiveRef.current = false;
+
+    clearWsRetry();
+    stopWsFallback();
+    setWsReconnecting(false);
 
     if (recorderRef.current?.state !== "inactive") recorderRef.current?.stop();
     recorderRef.current = null;
@@ -776,6 +898,16 @@ export default function ConsolePage() {
                   Retry
                 </button>
               )}
+            </div>
+          )}
+
+          {wsReconnecting && (
+            <div className="warn-banner warn-banner--inline">
+              Audio WebSocket disconnected — reconnecting
+              {(window.SpeechRecognition ?? window.webkitSpeechRecognition)
+                ? " (browser speech fallback active)"
+                : ""}
+              …
             </div>
           )}
 
