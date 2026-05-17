@@ -130,42 +130,45 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # segments to Redis pub/sub for listener WebSocket delivery.
     # Requires GOOGLE_TRANSLATE_API_KEY to be set; logs a warning if missing.
     fanout_redis = AsyncRedis.from_url(settings.redis_url, decode_responses=True)
-    translation_fanout: TranslationFanout | None = None
 
+    translate_provider = None
     if settings.google_translate_api_key:
         from app.providers.google_translate import GoogleTranslationProvider
 
         translate_provider = GoogleTranslationProvider(
             api_key=settings.google_translate_api_key,
         )
-        tts_svc = getattr(app.state, "tts_service", None)
-        translation_fanout = TranslationFanout(
-            translation_provider=translate_provider,
-            db_sessionmaker=sessionmaker,
-            redis=fanout_redis,
-            tts_service=tts_svc,
-        )
-        # Re-arm the fanout for any sessions that were already active before
-        # this worker started (e.g. after a rolling restart).
-        try:
-            async with sessionmaker() as db:
-                active_ids = (
-                    await db.execute(
-                        select(Session.id).where(Session.status == SessionStatus.ACTIVE)
-                    )
-                ).scalars().all()
-            for sid in active_ids:
-                await translation_fanout.start(sid)
-            if active_ids:
-                _log.info(
-                    "translation fanout seeded for %d active session(s)", len(active_ids)
-                )
-        except Exception:
-            _log.warning("could not seed translation fanout from DB")
     else:
         _log.warning(
-            "GOOGLE_TRANSLATE_API_KEY not configured; translation pipeline disabled"
+            "GOOGLE_TRANSLATE_API_KEY not configured; translation disabled "
+            "(source transcripts will still be forwarded to listeners)"
         )
+
+    tts_svc = getattr(app.state, "tts_service", None)
+    translation_fanout = TranslationFanout(
+        translation_provider=translate_provider,
+        db_sessionmaker=sessionmaker,
+        redis=fanout_redis,
+        tts_service=tts_svc,
+    )
+
+    # Re-arm the fanout for any sessions that were already active before
+    # this worker started (e.g. after a rolling restart).
+    try:
+        async with sessionmaker() as db:
+            active_ids = (
+                await db.execute(
+                    select(Session.id).where(Session.status == SessionStatus.ACTIVE)
+                )
+            ).scalars().all()
+        for sid in active_ids:
+            await translation_fanout.start(sid)
+        if active_ids:
+            _log.info(
+                "translation fanout seeded for %d active session(s)", len(active_ids)
+            )
+    except Exception:
+        _log.warning("could not seed translation fanout from DB")
 
     app.state.translation_fanout = translation_fanout
 
