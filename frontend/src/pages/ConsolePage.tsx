@@ -914,7 +914,11 @@ export default function ConsolePage() {
                     <button
                       type="button"
                       className="btn btn-danger console-capture-btn"
-                      onClick={() => void endSession()}
+                      onClick={() => {
+                        if (window.confirm("End this session? Listeners will be disconnected.")) {
+                          void endSession();
+                        }
+                      }}
                     >
                       End session
                     </button>
@@ -954,7 +958,11 @@ export default function ConsolePage() {
                   <button
                     type="button"
                     className="btn btn-danger console-capture-btn"
-                    onClick={() => void endSession()}
+                    onClick={() => {
+                      if (window.confirm("End this session? Listeners will be disconnected.")) {
+                        void endSession();
+                      }
+                    }}
                   >
                     End session
                   </button>
