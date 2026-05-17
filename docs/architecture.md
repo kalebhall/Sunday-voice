@@ -19,9 +19,12 @@ Sunday Voice consists of:
        the server, which decodes and windows audio into Whisper requests.
    - Both transports feed the same internal segment stream, so downstream
      translation/fan-out code is transport-agnostic.
-   - Buffers audio briefly.
-   - Sends audio windows to the Whisper API for transcription (note: the Whisper
-     HTTP API is request/response per chunk, not true bidirectional streaming).
+   - Buffers audio in a rolling buffer.
+   - Transcribes with a **sliding overlap window**: every few seconds it
+     re-transcribes the trailing ~15 s of audio so the model sees full
+     sentence context (note: the transcription HTTP API is request/response
+     per call, not true bidirectional streaming). Overlapping text between
+     consecutive windows is de-duplicated.
    - Normalizes transcript segments and sends them to the translation layer.
 
 3. **Translation service**  

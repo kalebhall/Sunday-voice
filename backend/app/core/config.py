@@ -59,15 +59,28 @@ class Settings(BaseSettings):
 
     # Providers
     openai_api_key: str = ""
-    whisper_model: str = "whisper-1"
-    # Max simultaneous Whisper API calls across all sessions.
-    # Tune upward if Whisper headroom allows; lower if you hit 429s.
+    whisper_model: str = "gpt-4o-mini-transcribe"
+    # Max simultaneous transcription API calls across all sessions.
+    # Tune upward if API headroom allows; lower if you hit 429s.
     whisper_max_concurrent: int = 5
-    # Flush audio buffer to Whisper after this many bytes.  At ~16 KB/s
-    # (Opus 128 kbps) a 2.5 s chunk is ~40 KB, so 32 KB triggers once per
-    # chunk.  The original 1 MiB default batched ~25 chunks (62 s) — far too
-    # large for real-time operation.
-    whisper_chunk_flush_bytes: int = 32_768
+    # Sliding overlap window (bytes of WebM/Opus audio, ~16 KB/s).
+    # window: how much trailing audio is re-transcribed each call — larger
+    #   gives the model more sentence context and higher accuracy.
+    # slide: how much fresh audio accumulates between calls — also the added
+    #   latency.  Each call resends (window/slide) of overlapping audio, so
+    #   that ratio is also the transcription-cost multiplier.
+    whisper_window_bytes: int = 240_000  # ~15 s of context
+    whisper_slide_bytes: int = 48_000  # ~3 s latency, ~5x cost
+    # Domain vocabulary fed to the model as a prompt to bias spelling of
+    # names and jargon.  Most effective in the meeting's spoken language.
+    whisper_prompt: str = (
+        "Transcript of a Latter-day Saint ward or stake meeting. Common terms: "
+        "ward, stake, sacrament meeting, priesthood, bishop, bishopric, "
+        "stake president, high council, Relief Society, elders quorum, "
+        "Primary, Young Women, Young Men, testimony, covenant, ordinance, "
+        "ministering, tithing, fast offering, Book of Mormon, "
+        "Doctrine and Covenants, General Conference, First Presidency."
+    )
     google_translate_api_key: str = ""
     tts_enabled: bool = True
     tts_audio_encoding: str = "MP3"
