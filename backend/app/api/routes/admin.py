@@ -134,7 +134,7 @@ async def create_user(
     ).scalar_one_or_none()
     if role is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role not found",
         )
     user = User(
@@ -198,7 +198,7 @@ async def update_user(
         ).scalar_one_or_none()
         if new_role is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="role not found",
             )
         if user.role.name == ROLE_ADMIN and new_role.name != ROLE_ADMIN:
@@ -242,7 +242,12 @@ async def update_user(
         },
     )
     await db.commit()
-    await db.refresh(user, ["role"])
+    # Re-query to pick up the potentially-changed role relationship.
+    user = (
+        await db.execute(
+            select(User).options(selectinload(User.role)).where(User.id == user_id)
+        )
+    ).scalar_one()
     return _user_out(user)
 
 

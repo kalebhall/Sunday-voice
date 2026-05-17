@@ -73,6 +73,20 @@ class FakeRedis:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _reset_transcript_pubsub() -> None:
+    """Re-initialise the module-level transcript_pubsub singleton for each test.
+
+    asyncio.Lock binds to the running event loop on first await.  With
+    pytest-asyncio's per-function event loops the lock becomes stale after the
+    first test that uses it, causing subsequent tests to raise
+    "bound to a different event loop".  Replacing _sessions and _lock with
+    fresh objects before every test gives each test its own loop-local state.
+    """
+    transcript_pubsub._sessions.clear()
+    transcript_pubsub._lock = asyncio.Lock()
+
+
 @pytest_asyncio.fixture
 async def db_maker() -> async_sessionmaker[AsyncSession]:
     """In-memory SQLite DB with required tables."""
@@ -268,15 +282,20 @@ class TestTranslationFanout:
         await asyncio.sleep(0.2)
         await fanout.stop(session_id)
 
-        # Should have published to two channels.
-        assert len(redis.published) == 2
+        # 3 messages: source transcript (en) + 2 translated (es, tl).
+        assert len(redis.published) == 3
         channels = {ch for ch, _ in redis.published}
+        assert f"session:{session_id}:lang:en" in channels  # source passthrough
         assert f"session:{session_id}:lang:es" in channels
         assert f"session:{session_id}:lang:tl" in channels
 
-        # Verify payload structure.
-        for channel, msg in redis.published:
-            data = json.loads(msg)
+        # Verify translated payloads (skip the source passthrough channel).
+        translated = [
+            (ch, json.loads(msg))
+            for ch, msg in redis.published
+            if not ch.endswith(":lang:en")
+        ]
+        for channel, data in translated:
             assert data["session_id"] == str(session_id)
             assert data["sequence"] == 1
             assert data["source_language"] == "en"
@@ -367,8 +386,12 @@ class TestTranslationFanout:
 
         await fanout.stop(session_id)
 
-        # Second event's translations should have been published.
-        assert len(redis.published) == 2
+        # Event 1 source (en) + event 2 source (en) + event 2 translations (es, tl) = 4.
+        # Event 1's translations failed so they were NOT published.
+        assert len(redis.published) == 4
+        channels = [ch for ch, _ in redis.published]
+        assert f"session:{session_id}:lang:es" in channels
+        assert f"session:{session_id}:lang:tl" in channels
 
     @pytest.mark.asyncio
     async def test_stop_all(
