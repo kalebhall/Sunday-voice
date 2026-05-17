@@ -322,7 +322,13 @@ export default function ConsolePage() {
         const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
           ? "audio/webm;codecs=opus"
           : "audio/webm";
-        const recorder = new MediaRecorder(stream, { mimeType });
+        // Pin bitrate so the 32 KB Whisper flush threshold is hit after ~1
+        // chunk regardless of browser (Firefox defaults to ~32 kbps which
+        // would take 4 chunks / 8 s to fill the buffer).
+        const recorder = new MediaRecorder(stream, {
+          mimeType,
+          audioBitsPerSecond: 128_000,
+        });
         recorderRef.current = recorder;
 
         recorder.ondataavailable = (e) => {
@@ -363,7 +369,17 @@ export default function ConsolePage() {
 
       ws.onerror = () => { /* onclose fires immediately after; handle reconnect there. */ };
       ws.onclose = (ev) => {
-        if (!mountedRef.current || !captureActiveRef.current || ev.wasClean) return;
+        if (!mountedRef.current || !captureActiveRef.current) return;
+        // 4500: transcription task died on the server (bad API key, quota, etc.)
+        if (ev.code === 4500) {
+          setCaptureError(
+            "Transcription failed on the server — check that OPENAI_API_KEY is valid and review server logs.",
+          );
+          setCaptureState("error");
+          captureActiveRef.current = false;
+          return;
+        }
+        if (ev.wasClean) return;
         onDisconnect();
       };
     }
