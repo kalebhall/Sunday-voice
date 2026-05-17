@@ -46,7 +46,7 @@ class TranslationFanout:
     def __init__(
         self,
         *,
-        translation_provider: TranslationProvider,
+        translation_provider: TranslationProvider | None,
         db_sessionmaker: async_sessionmaker[AsyncSession],
         redis: Redis,  # type: ignore[type-arg]
         cost_meter: CostMeter | None = None,
@@ -130,7 +130,7 @@ class TranslationFanout:
             lang for lang in target_languages if lang != event.language
         ]
 
-        if not languages_to_translate:
+        if not languages_to_translate or self._provider is None:
             return
 
         # Fan out translations concurrently.
