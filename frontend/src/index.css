@@ -416,6 +416,24 @@ body {
   margin-bottom: 0;
 }
 
+.warn-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+  border-radius: var(--radius);
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+.warn-banner--inline {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+}
+
 /* ---- Utility ---- */
 
 .text-muted {
