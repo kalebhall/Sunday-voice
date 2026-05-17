@@ -150,6 +150,11 @@ class WhisperAPIProvider:
 
         files = {"file": ("audio.webm", audio_bytes, "audio/webm")}
 
+        logger.info(
+            "whisper transcribe: sending %d bytes lang=%s",
+            len(audio_bytes),
+            source_language or "auto",
+        )
         t0 = time.monotonic()
         try:
             if self._semaphore is not None:
@@ -165,6 +170,12 @@ class WhisperAPIProvider:
                 time.monotonic() - t0
             )
         text = response.text.strip()
+        logger.info(
+            "whisper transcribe: got %d chars in %.2fs lang=%s",
+            len(text),
+            time.monotonic() - t0,
+            source_language or "auto",
+        )
 
         if self._cost_meter is not None:
             # Estimate audio duration from raw byte size.  WebM/Opus ≈ 16 kB/s

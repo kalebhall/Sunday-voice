@@ -195,12 +195,20 @@ async def transcription_task(
     )
 
     sequence = 0
+    call_count = 0
     try:
         async for text in provider.transcribe_stream(
             chunk_generator(queue),
             source_language=source_language,
         ):
+            call_count += 1
             if not text or not text.strip():
+                logger.info(
+                    "whisper returned empty text (call %d) session=%s lang=%s",
+                    call_count,
+                    session_id,
+                    source_language,
+                )
                 continue
             sequence += 1
             event = TranscriptEvent(
@@ -210,7 +218,7 @@ async def transcription_task(
                 text=text.strip(),
             )
             await transcript_pubsub.publish(event)
-            logger.debug(
+            logger.info(
                 "published transcript seq=%d session=%s len=%d",
                 sequence,
                 session_id,
