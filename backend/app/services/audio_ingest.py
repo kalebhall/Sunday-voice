@@ -14,11 +14,13 @@ from collections import deque
 from collections.abc import AsyncIterator
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.db.session import get_sessionmaker
 from app.models import Session, SessionStatus
+from app.models.segment import TranscriptSegment
 from app.providers.whisper import WhisperAPIProvider
 from app.services.pubsub import TranscriptEvent, transcript_pubsub
 
@@ -180,6 +182,29 @@ def enqueue_chunk(queue: asyncio.Queue[bytes | None], data: bytes, session_id: U
             logger.warning("chunk queue still full after eviction, session %s", session_id)
 
 
+async def starting_sequence(session_id: UUID) -> int:
+    """Return the highest transcript sequence already stored for a session.
+
+    Sequence numbers are scoped to the session, not the operator connection.
+    Seeding from the persisted max means a mid-session reconnect continues
+    numbering instead of restarting at 1 and colliding with the unique
+    ``(session_id, sequence)`` constraint on already-persisted segments.
+    """
+    try:
+        async with get_sessionmaker()() as db:
+            current_max = (
+                await db.execute(
+                    select(func.max(TranscriptSegment.sequence)).where(
+                        TranscriptSegment.session_id == session_id
+                    )
+                )
+            ).scalar_one_or_none()
+        return current_max or 0
+    except Exception:
+        logger.exception("could not load starting sequence for session %s", session_id)
+        return 0
+
+
 async def transcription_task(
     session_id: UUID,
     source_language: str,
@@ -196,7 +221,7 @@ async def transcription_task(
         semaphore=await get_whisper_semaphore(),
     )
 
-    sequence = 0
+    sequence = await starting_sequence(session_id)
     call_count = 0
     try:
         async for text in provider.transcribe_stream(
