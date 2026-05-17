@@ -124,6 +124,29 @@ async def operator_audio_ws(websocket: WebSocket, session_id: UUID) -> None:
                 data = await websocket.receive_bytes()
                 if not data:
                     continue
+
+                # If the transcription task has died (e.g. API key invalid,
+                # quota hit, or unrecoverable error) there is no point
+                # continuing to receive audio.  Close with a distinct code so
+                # the frontend can surface a meaningful error instead of
+                # showing "Waiting for speech…" forever.
+                if transcription.done() and not transcription.cancelled():
+                    exc: BaseException | None = None
+                    try:
+                        exc = transcription.exception()
+                    except Exception:
+                        pass
+                    if exc is not None:
+                        logger.error(
+                            "transcription task died for session %s: %s",
+                            session_id,
+                            exc,
+                        )
+                        await websocket.close(
+                            code=4500, reason="transcription failed — check server logs"
+                        )
+                        break
+
                 if not await byte_limiter.record_and_check(session_id, len(data)):
                     logger.warning(
                         "operator %d exceeded audio byte cap for session %s; closing",
