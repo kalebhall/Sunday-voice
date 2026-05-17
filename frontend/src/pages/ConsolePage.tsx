@@ -92,6 +92,8 @@ export default function ConsolePage() {
   // ----- Music / hymn mode — pauses transcription while music is playing -----
   const [musicPlaying, setMusicPlaying] = useState(false);
   const musicPlayingRef = useRef(false);
+  // Set by the server when Whisper auto-detects music tokens; cleared on speech resume.
+  const [autoMusicDetected, setAutoMusicDetected] = useState(false);
 
   // ----- Refs -----
   const mountedRef = useRef(true);
@@ -337,6 +339,15 @@ export default function ConsolePage() {
       ws.binaryType = "arraybuffer";
       operatorWsRef.current = ws;
 
+      ws.onmessage = (e) => {
+        if (typeof e.data !== "string") return;
+        try {
+          const msg = JSON.parse(e.data) as { type: string };
+          if (msg.type === "auto_music_detected") setAutoMusicDetected(true);
+          else if (msg.type === "auto_speech_resumed") setAutoMusicDetected(false);
+        } catch { /* ignore */ }
+      };
+
       ws.onopen = () => {
         if (!mountedRef.current || !captureActiveRef.current) { ws.close(); return; }
 
@@ -381,6 +392,8 @@ export default function ConsolePage() {
       const onDisconnect = () => {
         if (!mountedRef.current || !captureActiveRef.current) return;
         if (operatorWsRef.current !== ws) return;
+
+        setAutoMusicDetected(false);
 
         // Stop the recorder but keep the stream alive for fallback mic access.
         if (recorderRef.current?.state !== "inactive") recorderRef.current?.stop();
@@ -631,6 +644,7 @@ export default function ConsolePage() {
     captureActiveRef.current = false;
     musicPlayingRef.current = false;
     setMusicPlaying(false);
+    setAutoMusicDetected(false);
 
     clearWsRetry();
     stopWsFallback();
@@ -659,6 +673,7 @@ export default function ConsolePage() {
     captureActiveRef.current = false;
     musicPlayingRef.current = false;
     setMusicPlaying(false);
+    setAutoMusicDetected(false);
 
     clearWsRetry();
     stopWsFallback();
@@ -975,6 +990,12 @@ export default function ConsolePage() {
             </div>
           )}
 
+          {autoMusicDetected && !musicPlaying && captureState === "active" && (
+            <div className="warn-banner warn-banner--inline">
+              Music or hymn detected — transcription paused automatically
+            </div>
+          )}
+
           <p className="console-meta text-muted">
             Transport:{" "}
             {session.audio_transport === "webrtc"
@@ -1051,7 +1072,7 @@ export default function ConsolePage() {
                 >
                   {segs.length === 0 ? (
                     <p className="transcript-empty text-muted">
-                      {captureState === "active" && musicPlaying
+                      {captureState === "active" && (musicPlaying || autoMusicDetected)
                         ? "Music / hymn — transcription paused"
                         : captureState === "active"
                           ? "Waiting for speech…"

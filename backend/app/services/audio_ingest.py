@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections import deque
 from collections.abc import AsyncIterator
@@ -28,6 +29,29 @@ logger = logging.getLogger(__name__)
 
 # Receive-side backpressure: max queued chunks before eviction.
 CHUNK_QUEUE_MAXSIZE = 30  # ~60-90 s of audio at 2-3 s chunks
+
+# ---------------------------------------------------------------------------
+# Music / non-speech auto-detection
+# ---------------------------------------------------------------------------
+
+# Whisper emits these bracketed/parenthesised tokens and the musical note
+# symbol when it hears music, singing, or applause instead of speech.
+_MUSIC_RE = re.compile(
+    r"\[(?:[^\]]*(?:music|singing|song|applause)[^\]]*)\]"
+    r"|\((?:[^)]*(?:music|singing|song|applause)[^)]*)\)"
+    r"|♪+",
+    re.IGNORECASE,
+)
+
+# How many consecutive Whisper outputs that are pure music tokens must occur
+# before we send an "auto_music_detected" message to the operator frontend.
+MUSIC_DETECT_THRESHOLD = 2
+
+
+def _is_music_output(text: str) -> bool:
+    """Return True when a Whisper result contains only non-speech tokens."""
+    remainder = _MUSIC_RE.sub("", text).strip(" .,\n\t—-")
+    return bool(_MUSIC_RE.search(text)) and len(remainder) < 3
 
 # Per-session lock: maps session_id → True while an operator is connected.
 _active_operators: dict[UUID, bool] = {}
@@ -209,6 +233,7 @@ async def transcription_task(
     session_id: UUID,
     source_language: str,
     queue: asyncio.Queue[bytes | None],
+    control_queue: asyncio.Queue[dict[str, str] | None] | None = None,
 ) -> None:
     """Consume audio chunks, run transcription, publish events."""
     settings = get_settings()
@@ -223,6 +248,8 @@ async def transcription_task(
 
     sequence = await starting_sequence(session_id)
     call_count = 0
+    consecutive_music = 0
+    music_signalled = False
     try:
         async for text in provider.transcribe_stream(
             chunk_generator(queue),
@@ -237,6 +264,29 @@ async def transcription_task(
                     source_language,
                 )
                 continue
+
+            if _is_music_output(text):
+                consecutive_music += 1
+                logger.info(
+                    "music token detected (run=%d) session=%s",
+                    consecutive_music,
+                    session_id,
+                )
+                if (
+                    consecutive_music >= MUSIC_DETECT_THRESHOLD
+                    and not music_signalled
+                    and control_queue is not None
+                ):
+                    music_signalled = True
+                    await control_queue.put({"type": "auto_music_detected"})
+                continue  # suppress music tokens — don't publish as transcript
+
+            # Normal speech output; clear music state if we were in music mode.
+            if music_signalled and control_queue is not None:
+                music_signalled = False
+                await control_queue.put({"type": "auto_speech_resumed"})
+            consecutive_music = 0
+
             sequence += 1
             event = TranscriptEvent(
                 session_id=session_id,

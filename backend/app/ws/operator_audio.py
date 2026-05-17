@@ -45,6 +45,27 @@ logger = logging.getLogger(__name__)
 operator_audio_router = APIRouter()
 
 
+async def _control_sender(
+    websocket: WebSocket,
+    control_queue: asyncio.Queue[dict[str, str] | None],
+    session_id: UUID,
+) -> None:
+    """Forward transcription-state control messages to the operator browser."""
+    while True:
+        msg = await control_queue.get()
+        if msg is None:
+            return
+        try:
+            await websocket.send_json(msg)
+            logger.debug("sent control msg %s to session %s", msg["type"], session_id)
+        except Exception:
+            logger.debug(
+                "could not send control message to session %s; stopping sender",
+                session_id,
+            )
+            return
+
+
 @operator_audio_router.websocket("/operator/{session_id}/audio")
 async def operator_audio_ws(websocket: WebSocket, session_id: UUID) -> None:
     """Operator audio ingest endpoint.
@@ -107,14 +128,20 @@ async def operator_audio_ws(websocket: WebSocket, session_id: UUID) -> None:
         chunk_queue: asyncio.Queue[bytes | None] = asyncio.Queue(
             maxsize=CHUNK_QUEUE_MAXSIZE
         )
+        # Queue for music-detection control messages back to the browser.
+        control_queue: asyncio.Queue[dict[str, str] | None] = asyncio.Queue()
 
         # Ensure the pub/sub channel exists for this session.
         await transcript_pubsub.get_or_create(session_id)
 
         # Spawn transcription consumer as a background task.
         transcription = asyncio.create_task(
-            transcription_task(session_id, source_language, chunk_queue),
+            transcription_task(session_id, source_language, chunk_queue, control_queue),
             name=f"transcribe-{session_id}",
+        )
+        control_sender = asyncio.create_task(
+            _control_sender(websocket, control_queue, session_id),
+            name=f"control-sender-{session_id}",
         )
 
         byte_limiter = await get_audio_byte_limiter()
@@ -166,6 +193,11 @@ async def operator_audio_ws(websocket: WebSocket, session_id: UUID) -> None:
             )
         finally:
             await drain_transcription(chunk_queue, transcription, session_id)
+            control_sender.cancel()
+            try:
+                await control_sender
+            except asyncio.CancelledError:
+                pass
             if translation_fanout is not None:
                 await translation_fanout.stop(session_id)
     finally:
