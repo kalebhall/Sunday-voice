@@ -89,6 +89,10 @@ export default function ConsolePage() {
   // ----- WS reconnect state -----
   const [wsReconnecting, setWsReconnecting] = useState(false);
 
+  // ----- Music / hymn mode — pauses transcription while music is playing -----
+  const [musicPlaying, setMusicPlaying] = useState(false);
+  const musicPlayingRef = useRef(false);
+
   // ----- Refs -----
   const mountedRef = useRef(true);
   const captureActiveRef = useRef(false);
@@ -216,6 +220,29 @@ export default function ConsolePage() {
     }
   }
 
+  // ----- Music / hymn mode toggle -----
+  function toggleMusicMode() {
+    const next = !musicPlayingRef.current;
+    musicPlayingRef.current = next;
+    setMusicPlaying(next);
+
+    if (next) {
+      // Pause chunk delivery to the transcription backend
+      if (recorderRef.current?.state === "recording") {
+        recorderRef.current.pause();
+      }
+      // Mute the audio track so WebRTC sends silence instead of music
+      streamRef.current?.getAudioTracks().forEach((t: MediaStreamTrack) => { t.enabled = false; });
+    } else {
+      // Resume chunk delivery
+      if (recorderRef.current?.state === "paused") {
+        recorderRef.current.resume();
+      }
+      // Restore WebRTC track
+      streamRef.current?.getAudioTracks().forEach((t: MediaStreamTrack) => { t.enabled = true; });
+    }
+  }
+
   // ----- WS retry / fallback helpers -----
   function clearWsRetry() {
     if (wsRetryTimerRef.current) {
@@ -259,7 +286,7 @@ export default function ConsolePage() {
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      if (ws.readyState !== WebSocket.OPEN) return;
+      if (ws.readyState !== WebSocket.OPEN || musicPlayingRef.current) return;
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         if (!result.isFinal) continue;
@@ -332,7 +359,7 @@ export default function ConsolePage() {
         recorderRef.current = recorder;
 
         recorder.ondataavailable = (e) => {
-          if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+          if (e.data.size > 0 && ws.readyState === WebSocket.OPEN && !musicPlayingRef.current) {
             ws.send(e.data);
           }
         };
@@ -345,6 +372,10 @@ export default function ConsolePage() {
           captureActiveRef.current = false;
         };
         recorder.start(2000); // 2-second chunks
+        // If music mode was active before a reconnect, keep the recorder paused.
+        if (musicPlayingRef.current) {
+          recorder.pause();
+        }
       };
 
       const onDisconnect = () => {
@@ -475,7 +506,7 @@ export default function ConsolePage() {
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      if (ws.readyState !== WebSocket.OPEN) return;
+      if (ws.readyState !== WebSocket.OPEN || musicPlayingRef.current) return;
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         if (!result.isFinal) continue;
@@ -598,6 +629,8 @@ export default function ConsolePage() {
   async function pauseCapture() {
     setCaptureState("pausing");
     captureActiveRef.current = false;
+    musicPlayingRef.current = false;
+    setMusicPlaying(false);
 
     clearWsRetry();
     stopWsFallback();
@@ -624,6 +657,8 @@ export default function ConsolePage() {
   async function endSession() {
     setCaptureState("stopping");
     captureActiveRef.current = false;
+    musicPlayingRef.current = false;
+    setMusicPlaying(false);
 
     clearWsRetry();
     stopWsFallback();
@@ -877,6 +912,18 @@ export default function ConsolePage() {
                 <div className="capture-btn-group">
                   <button
                     type="button"
+                    className={`btn console-capture-btn ${musicPlaying ? "btn-warning" : "btn-ghost"}`}
+                    onClick={toggleMusicMode}
+                    title={
+                      musicPlaying
+                        ? "Transcription paused — click when music is done"
+                        : "Click when a hymn or song starts to pause transcription"
+                    }
+                  >
+                    {musicPlaying ? "Resume — music done" : "Music / hymn"}
+                  </button>
+                  <button
+                    type="button"
                     className="btn btn-ghost console-capture-btn"
                     onClick={() => void pauseCapture()}
                   >
@@ -1004,9 +1051,11 @@ export default function ConsolePage() {
                 >
                   {segs.length === 0 ? (
                     <p className="transcript-empty text-muted">
-                      {captureState === "active"
-                        ? "Waiting for speech…"
-                        : "No transcript yet"}
+                      {captureState === "active" && musicPlaying
+                        ? "Music / hymn — transcription paused"
+                        : captureState === "active"
+                          ? "Waiting for speech…"
+                          : "No transcript yet"}
                     </p>
                   ) : (
                     segs.map((s) => (

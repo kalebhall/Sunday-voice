@@ -267,6 +267,15 @@ body {
   background: var(--color-danger-hover);
 }
 
+.btn-warning {
+  background: var(--color-warning);
+  color: #fff;
+}
+
+.btn-warning:hover:not(:disabled) {
+  background: #b45309;
+}
+
 .btn-sm {
   padding: 0.3125rem 0.625rem;
   font-size: 0.8125rem;
