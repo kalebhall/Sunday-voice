@@ -545,6 +545,8 @@ export default function ConsolePage() {
         setSession(data);
       }
 
+      captureActiveRef.current = true;
+
       if (activeSession.audio_transport === "web_speech") {
         // Web Speech API manages the mic internally; skip getUserMedia.
         startWebSpeechCapture(id, activeSession.source_language);
@@ -570,7 +572,6 @@ export default function ConsolePage() {
         }
       }
 
-      captureActiveRef.current = true;
       setCaptureState("active");
     } catch (err) {
       captureActiveRef.current = false;
