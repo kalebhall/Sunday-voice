@@ -41,17 +41,35 @@ pull_code() {
 }
 
 # ---------------------------------------------------------------------------
-# 2. Install / upgrade Python dependencies
+# 2. Install / upgrade Python dependencies (including dev/test extras)
 # ---------------------------------------------------------------------------
 install_python_deps() {
     info "Installing Python dependencies..."
     as_app "$APP_DIR/.venv/bin/pip" install --quiet --upgrade pip
-    as_app "$APP_DIR/.venv/bin/pip" install --quiet "$APP_DIR"
+    as_app "$APP_DIR/.venv/bin/pip" install --quiet "$APP_DIR[dev]"
     info "Python dependencies up to date."
 }
 
 # ---------------------------------------------------------------------------
-# 3. Run database migrations
+# 3. Run test suite — abort the deploy if any test fails
+# ---------------------------------------------------------------------------
+run_tests() {
+    info "Running backend test suite..."
+    # Tests use an in-memory SQLite database via conftest.py; no live DB needed.
+    as_app env \
+        APP_ENV=test \
+        RETENTION_CLEANUP_ENABLED=false \
+        TTS_ENABLED=false \
+        "$APP_DIR/.venv/bin/pytest" \
+            --tb=short \
+            -q \
+            "$APP_DIR/backend/tests" \
+        || die "Tests failed — aborting deploy. Fix failing tests before deploying."
+    info "All tests passed."
+}
+
+# ---------------------------------------------------------------------------
+# 4. Run database migrations
 # ---------------------------------------------------------------------------
 run_migrations() {
     info "Running database migrations..."
@@ -60,7 +78,7 @@ run_migrations() {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Build frontend (only when frontend source changed)
+# 5. Build frontend (only when frontend source changed)
 # ---------------------------------------------------------------------------
 frontend_changed() {
     # Returns true if any file under frontend/ changed in the last pull.
@@ -131,6 +149,7 @@ main() {
 
     pull_code
     install_python_deps
+    run_tests
     run_migrations
 
     if frontend_changed; then
