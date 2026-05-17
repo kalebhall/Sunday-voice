@@ -31,7 +31,11 @@ export default function SessionFormPage() {
         if (data) {
           setName(data.name);
           setSourceLanguage(data.source_language);
-          setAudioTransport(data.audio_transport);
+          setAudioTransport(
+            data.audio_transport === "web_speech"
+              ? "websocket_chunks"
+              : data.audio_transport,
+          );
           setTargetLanguages(data.target_languages);
           if (data.scheduled_at) {
             setScheduledAt(data.scheduled_at.slice(0, 16));
@@ -242,20 +246,6 @@ export default function SessionFormPage() {
                 <span>
                   WebRTC{" "}
                   <span className="text-muted">(lower latency, requires STUN)</span>
-                </span>
-              </label>
-              <label className="radio-option">
-                <input
-                  type="radio"
-                  name="transport"
-                  value="web_speech"
-                  checked={audioTransport === "web_speech"}
-                  onChange={() => setAudioTransport("web_speech")}
-                  disabled={submitting}
-                />
-                <span>
-                  Browser (Web Speech API){" "}
-                  <span className="text-muted">(fallback when Whisper is unavailable; Chrome/Edge only)</span>
                 </span>
               </label>
             </div>

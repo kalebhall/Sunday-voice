@@ -309,11 +309,19 @@ export default function ConsolePage() {
     };
 
     ws.onerror = () => { /* Fallback WS errors are silent while audio WS retries. */ };
-    ws.onclose = () => {
-      if (fallbackWsRef.current === ws) {
-        speechRecogRef.current?.stop();
-        speechRecogRef.current = null;
-        fallbackWsRef.current = null;
+    ws.onclose = (ev) => {
+      if (fallbackWsRef.current !== ws) return;
+      speechRecogRef.current?.stop();
+      speechRecogRef.current = null;
+      fallbackWsRef.current = null;
+      // 4409 means the server operator lock is still held by the just-dropped audio
+      // WS while drain_transcription runs.  Retry after a short wait.
+      if (ev.code === 4409 && captureActiveRef.current && mountedRef.current) {
+        setTimeout(() => {
+          if (captureActiveRef.current && mountedRef.current) {
+            startWsChunksFallback(sessionId, sourceLanguage);
+          }
+        }, 500);
       }
     };
   }
@@ -423,7 +431,6 @@ export default function ConsolePage() {
           captureActiveRef.current = false;
           return;
         }
-        if (ev.wasClean) return;
         onDisconnect();
       };
     }
