@@ -2,9 +2,21 @@
 
 ## Transcription
 
-- **MVP default**: OpenAI Whisper API
-  - Pros: supports English, Spanish, Tongan, Tagalog; good accuracy; no GPU required.
+- **MVP default**: OpenAI transcription API, model `gpt-4o-mini-transcribe`
+  - Pros: supports English, Spanish, Tongan, Tagalog; higher accuracy than the
+    legacy `whisper-1` model; cheaper per minute; no GPU required.
   - Cons: audio leaves your server; cost per minute.
+  - `whisper-1` and `gpt-4o-transcribe` remain selectable via `WHISPER_MODEL`.
+  - **Sliding overlap window**: audio is not cut into tiny independent slices.
+    The pipeline keeps a rolling buffer and re-transcribes a long trailing
+    window (~15 s) every few seconds (~3 s slide), so the model always has
+    full sentence context. Overlapping text between windows is de-duplicated
+    before fan-out. Trade-off: each call resends overlapping audio, so
+    transcription cost scales by roughly window ÷ slide (~5x). Tune
+    `WHISPER_WINDOW_BYTES` / `WHISPER_SLIDE_BYTES` to balance accuracy,
+    latency, and cost.
+  - A domain-vocabulary `WHISPER_PROMPT` biases spelling of ward/stake jargon
+    and names.
 
 - **Future option**: Self-hosted Whisper
   - Runs locally on GPU/CPU.

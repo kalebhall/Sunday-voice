@@ -190,7 +190,9 @@ async def transcription_task(
     provider = WhisperAPIProvider(
         api_key=settings.openai_api_key,
         model=settings.whisper_model,
-        chunk_flush_bytes=settings.whisper_chunk_flush_bytes,
+        window_bytes=settings.whisper_window_bytes,
+        slide_bytes=settings.whisper_slide_bytes,
+        prompt=settings.whisper_prompt,
         semaphore=await get_whisper_semaphore(),
     )
 
