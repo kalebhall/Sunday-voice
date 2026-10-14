@@ -461,3 +461,66 @@ class TestProtocolConformance:
 
         provider = WhisperAPIProvider(api_key="sk-test")
         assert isinstance(provider, TranscriptionProvider)
+
+
+# ---------------------------------------------------------------------------
+# Confidence filtering
+# ---------------------------------------------------------------------------
+
+
+class TestConfidenceFilter:
+    """Low-confidence output is dropped before it reaches the transcript."""
+
+    async def _run(self, model: str, body: dict) -> tuple[list[str], _MockTransport]:
+        import json
+
+        transport = _MockTransport(text=json.dumps(body))
+        provider = WhisperAPIProvider(
+            api_key="sk-test", http_client=_make_client(transport), model=model
+        )
+        segments = [
+            seg async for seg in provider.transcribe_stream(_audio_chunks(AUDIO_FIXTURE_SMALL))
+        ]
+        return segments, transport
+
+    @pytest.mark.asyncio
+    async def test_gpt4o_requests_logprobs(self) -> None:
+        body = {"text": "Hello there", "logprobs": [{"token": "Hello", "logprob": -0.1}]}
+        segments, transport = await self._run("gpt-4o-mini-transcribe", body)
+        assert segments == ["Hello there"]
+        sent = transport.requests[0].content.decode(errors="ignore")
+        assert "logprobs" in sent
+        assert 'name="response_format"\r\n\r\njson' in sent
+
+    @pytest.mark.asyncio
+    async def test_gpt4o_low_confidence_dropped(self) -> None:
+        body = {
+            "text": "garbled nonsense words",
+            "logprobs": [{"token": "x", "logprob": -2.5}] * 12,
+        }
+        segments, _ = await self._run("gpt-4o-mini-transcribe", body)
+        assert segments == []
+
+    @pytest.mark.asyncio
+    async def test_gpt4o_scores_only_tail(self) -> None:
+        # A confident start does not rescue a garbled tail of fresh audio.
+        logprobs = [{"token": "a", "logprob": -0.05}] * 90 + [
+            {"token": "b", "logprob": -3.0}
+        ] * 20
+        body = {"text": "good start then garbage", "logprobs": logprobs}
+        segments, _ = await self._run("gpt-4o-mini-transcribe", body)
+        assert segments == []
+
+    @pytest.mark.asyncio
+    async def test_whisper1_drops_low_confidence_segments(self) -> None:
+        body = {
+            "text": "ignored",
+            "segments": [
+                {"text": " Good morning.", "avg_logprob": -0.3, "no_speech_prob": 0.01},
+                {"text": " mumble garbage", "avg_logprob": -1.6, "no_speech_prob": 0.2},
+                {"text": " Thank you.", "avg_logprob": -0.4, "no_speech_prob": 0.9},
+            ],
+        }
+        segments, transport = await self._run("whisper-1", body)
+        assert segments == ["Good morning."]
+        assert "verbose_json" in transport.requests[0].content.decode(errors="ignore")

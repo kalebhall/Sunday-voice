@@ -81,7 +81,18 @@ class Settings(BaseSettings):
         "ministering, tithing, fast offering, Book of Mormon, "
         "Doctrine and Covenants, General Conference, First Presidency."
     )
+    # Drop transcription output the model isn't confident about.  Compared
+    # against the average token log-probability (gpt-4o models) or each
+    # segment's avg_logprob (whisper-1); -1.0 matches Whisper's own default.
+    # Lower it (e.g. -1.5) if real speech is being dropped; set it to -100 to
+    # turn the check off.
+    transcription_min_avg_logprob: float = -1.0
     google_translate_api_key: str = ""
+    # Mask profanity in transcripts and translations, and strip phrases the
+    # transcription model invents on silence ("Thanks for watching", ...).
+    content_filter_enabled: bool = True
+    # Comma-separated extra words to mask in every language.
+    content_filter_extra_words: str = ""
     tts_enabled: bool = True
     tts_audio_encoding: str = "MP3"
     tts_voice_overrides: str = ""  # comma-separated "lang=voice" pairs, e.g. "es=es-US-Wavenet-B"

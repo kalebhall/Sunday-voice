@@ -23,6 +23,7 @@ from app.db.session import get_sessionmaker
 from app.models import Session, SessionStatus
 from app.models.segment import TranscriptSegment
 from app.providers.whisper import WhisperAPIProvider
+from app.services.content_filter import clean_transcript
 from app.services.pubsub import TranscriptEvent, transcript_pubsub
 
 logger = logging.getLogger(__name__)
@@ -243,6 +244,7 @@ async def transcription_task(
         window_bytes=settings.whisper_window_bytes,
         slide_bytes=settings.whisper_slide_bytes,
         prompt=settings.whisper_prompt,
+        min_avg_logprob=settings.transcription_min_avg_logprob,
         semaphore=await get_whisper_semaphore(),
     )
 
@@ -287,12 +289,21 @@ async def transcription_task(
                 await control_queue.put({"type": "auto_speech_resumed"})
             consecutive_music = 0
 
+            clean = clean_transcript(text.strip(), source_language)
+            if not clean:
+                logger.info(
+                    "transcript filtered out entirely (call %d) session=%s",
+                    call_count,
+                    session_id,
+                )
+                continue
+
             sequence += 1
             event = TranscriptEvent(
                 session_id=session_id,
                 sequence=sequence,
                 language=source_language,
-                text=text.strip(),
+                text=clean,
             )
             await transcript_pubsub.publish(event)
             logger.info(
