@@ -14,6 +14,9 @@ declare global {
 
 type SessionOut = components["schemas"]["SessionOut"];
 
+// Web Speech fallback results scored below this are treated as mishearings.
+const MIN_SPEECH_CONFIDENCE = 0.4;
+
 interface Segment {
   seq: number;
   text: string;
@@ -292,6 +295,10 @@ export default function ConsolePage() {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         if (!result.isFinal) continue;
+        // Browsers report 0 when they have no score; only drop real low scores,
+        // which is where misheard (and sometimes offensive) words come from.
+        const { confidence } = result[0];
+        if (confidence > 0 && confidence < MIN_SPEECH_CONFIDENCE) continue;
         const text = result[0].transcript.trim();
         if (text) ws.send(JSON.stringify({ text, language: sourceLanguage }));
       }

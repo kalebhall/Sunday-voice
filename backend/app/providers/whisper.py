@@ -12,6 +12,7 @@ clean incremental stream of new transcript text.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -45,6 +46,15 @@ _WEBM_BYTES_PER_SECOND = 16_000
 #   slide  ≈ 3 s of new audio between calls (also the added latency)
 _DEFAULT_WINDOW_BYTES = 240_000
 _DEFAULT_SLIDE_BYTES = 48_000
+
+# Output below this average token log-probability is treated as a mishearing
+# and dropped.  -1.0 matches Whisper's own ``logprob_threshold`` default.
+_DEFAULT_MIN_AVG_LOGPROB = -1.0
+# whisper-1 segments the model thinks are probably silence are dropped too.
+_NO_SPEECH_THRESHOLD = 0.6
+# gpt-4o models score the whole window; only the newest tokens are new text,
+# so confidence is measured on at least this many trailing tokens.
+_MIN_SCORED_TOKENS = 10
 
 # WebM EBML ID for a Cluster element.  Everything in the bitstream before the
 # first Cluster is the "initialization segment" (EBML header + Segment element
@@ -163,6 +173,7 @@ class WhisperAPIProvider:
         window_bytes: int = _DEFAULT_WINDOW_BYTES,
         slide_bytes: int = _DEFAULT_SLIDE_BYTES,
         prompt: str = "",
+        min_avg_logprob: float = _DEFAULT_MIN_AVG_LOGPROB,
         http_client: httpx.AsyncClient | None = None,
         base_url: str = "https://api.openai.com/v1",
         semaphore: asyncio.Semaphore | None = None,
@@ -176,6 +187,7 @@ class WhisperAPIProvider:
         self._window_bytes = window_bytes
         self._slide_bytes = slide_bytes
         self._prompt = prompt
+        self._min_avg_logprob = min_avg_logprob
         self._base_url = base_url.rstrip("/")
         self._external_client = http_client
         # Optional semaphore that limits the number of concurrent API calls
@@ -251,7 +263,15 @@ class WhisperAPIProvider:
         """POST ``init + window`` audio to the API and return transcript text."""
         audio_bytes = webm_init + b"".join(window)
 
-        data: dict[str, str] = {"model": self._model, "response_format": "text"}
+        data: dict[str, str] = {"model": self._model}
+        if self._model.startswith("whisper"):
+            # Per-segment avg_logprob / no_speech_prob for confidence filtering.
+            data["response_format"] = "verbose_json"
+        elif self._model.startswith("gpt-4o"):
+            data["response_format"] = "json"
+            data["include[]"] = "logprobs"
+        else:
+            data["response_format"] = "text"
         if source_language:
             data["language"] = source_language
         if self._prompt:
@@ -280,7 +300,7 @@ class WhisperAPIProvider:
             segment_transcription_duration_seconds.labels(provider="openai").observe(
                 time.monotonic() - t0
             )
-        text = response.text.strip()
+        text = self._confident_text(response.text)
         logger.info(
             "transcribe: got %d chars in %.2fs lang=%s",
             len(text),
@@ -298,6 +318,54 @@ class WhisperAPIProvider:
                 units=estimated_seconds / 60.0,
             )
 
+        return text
+
+    def _confident_text(self, body: str) -> str:
+        """Extract transcript text, dropping output the model is unsure of.
+
+        Noisy or clipped audio makes the model guess, and its guesses are where
+        nonsense (and offensive) words come from.  Plain-text bodies carry no
+        confidence data and are returned as-is.
+        """
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            return body.strip()
+        if not isinstance(payload, dict):
+            return body.strip()
+
+        segments = payload.get("segments")
+        if isinstance(segments, list) and segments:
+            kept = [
+                seg.get("text", "").strip()
+                for seg in segments
+                if seg.get("avg_logprob", 0.0) >= self._min_avg_logprob
+                and seg.get("no_speech_prob", 0.0) <= _NO_SPEECH_THRESHOLD
+            ]
+            if len(kept) < len(segments):
+                logger.info(
+                    "transcribe: dropped %d/%d low-confidence segments",
+                    len(segments) - len(kept),
+                    len(segments),
+                )
+            return " ".join(t for t in kept if t)
+
+        text = str(payload.get("text", "")).strip()
+        logprobs = payload.get("logprobs")
+        if text and isinstance(logprobs, list) and logprobs:
+            # New words sit at the end of the window: score the trailing share
+            # of tokens that corresponds to the fresh audio.
+            share = self._slide_bytes / max(self._window_bytes, 1)
+            count = max(_MIN_SCORED_TOKENS, int(len(logprobs) * share))
+            tail = [lp.get("logprob", 0.0) for lp in logprobs[-count:]]
+            avg = sum(tail) / len(tail)
+            if avg < self._min_avg_logprob:
+                logger.info(
+                    "transcribe: dropped low-confidence window (avg logprob %.2f < %.2f)",
+                    avg,
+                    self._min_avg_logprob,
+                )
+                return ""
         return text
 
     async def _post_with_retry(

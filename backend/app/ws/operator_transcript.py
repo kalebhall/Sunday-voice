@@ -41,6 +41,7 @@ from app.services.audio_ingest import (
     release_operator_lock,
     validate_active_session,
 )
+from app.services.content_filter import clean_transcript
 from app.services.pubsub import TranscriptEvent, transcript_pubsub
 from app.ws.auth import authenticate_ws_operator
 
@@ -136,6 +137,10 @@ async def operator_transcript_ws(websocket: WebSocket, session_id: UUID) -> None
                 language = payload.get("language", "")
                 if not isinstance(language, str) or not language.strip():
                     language = source_language
+
+                text = clean_transcript(text, language)
+                if not text:
+                    continue
 
                 sequence += 1
                 event = TranscriptEvent(

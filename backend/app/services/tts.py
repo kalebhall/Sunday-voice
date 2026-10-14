@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.segment import TranslationSegment
 from app.models.session import SessionLanguage
+from app.services.content_filter import for_speech
 
 if TYPE_CHECKING:
     from app.providers.base import TTSProvider
@@ -143,7 +144,10 @@ class TTSService:
         language: str,
     ) -> str:
         """Synthesize (or serve from cache) and return the cache key."""
+        text = for_speech(text)
         key = cache_key(text, language)
+        if not text:
+            return key  # nothing left to say once masked words are removed
 
         # Check cache first.
         if self._cache.get(key) is not None:
@@ -183,7 +187,7 @@ class TTSService:
             if lang_row is None or not lang_row.tts_enabled:
                 return None, self._cache.content_type
 
-        key = cache_key(seg.text, seg.language_code)
+        key = cache_key(for_speech(seg.text), seg.language_code)
         audio = self._cache.get(key)
         return audio, self._cache.content_type
 

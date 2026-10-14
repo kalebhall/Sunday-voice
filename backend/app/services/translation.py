@@ -23,6 +23,7 @@ from app.models.segment import TranslationSegment
 from app.models.session import SessionLanguage
 from app.core.metrics import provider_errors_total, segment_translation_duration_seconds
 from app.providers.base import CostMeter, TranslationProvider
+from app.services.content_filter import mask_profanity, strip_profanity
 from app.services.pubsub import TranscriptEvent, transcript_pubsub
 
 if TYPE_CHECKING:
@@ -159,10 +160,16 @@ class TranslationFanout:
         transcript_segment_id: int | None,
     ) -> None:
         """Translate, persist, optionally synthesize TTS, and publish."""
+        # Never hand masked or offensive words to the translator; it would
+        # either echo them or translate them into something worse.
+        source_text = strip_profanity(event.text, event.language)
+        if not source_text:
+            return
+
         t0 = time.monotonic()
         try:
             translated_text = await self._provider.translate(
-                text=event.text,
+                text=source_text,
                 source_language=event.language,
                 target_language=target_language,
             )
@@ -173,6 +180,8 @@ class TranslationFanout:
             segment_translation_duration_seconds.labels(
                 provider="google", target_language=target_language
             ).observe(time.monotonic() - t0)
+
+        translated_text = mask_profanity(translated_text, target_language)
 
         # Persist TranslationSegment.
         translation_segment_id: int | None = None
