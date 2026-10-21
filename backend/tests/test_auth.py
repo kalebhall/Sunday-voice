@@ -23,7 +23,6 @@ from app.core.security import (
     verify_password,
 )
 from app.db.session import get_session
-from app.main import app
 from app.models import Role, User
 
 
@@ -348,8 +347,8 @@ def test_me_rejects_tampered_token(client: TestClient, admin_user: User) -> None
 def role_guarded_client(
     db_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> Iterator[TestClient]:
-    """Mount a handful of routes guarded by require_role() on the live app."""
-    router_app = app  # reuse the main app so middleware / overrides apply
+    """Mount role-guarded routes on an isolated app, independent of built SPA assets."""
+    router_app = FastAPI()
 
     async def _override_get_session() -> AsyncIterator[AsyncSession]:
         async with db_sessionmaker() as session:
@@ -357,26 +356,26 @@ def role_guarded_client(
 
     router_app.dependency_overrides[get_session] = _override_get_session
 
-    # Register once; idempotent for the test process.
-    if not any(
-        getattr(r, "path", "") == "/__test_admin_only" for r in router_app.routes
-    ):
+    async def _admin(user: CurrentUser) -> dict[str, str]:
+        return {"email": user.email}
 
-        @router_app.get("/__test_admin_only")
-        async def _admin(user: User = Depends(require_role("admin"))) -> dict[str, str]:
-            return {"email": user.email}
+    async def _any(user: CurrentUser) -> dict[str, str]:
+        return {"email": user.email}
 
-        @router_app.get("/__test_any")
-        async def _any(
-            user: User = Depends(require_role("admin", "operator")),
-        ) -> dict[str, str]:
-            return {"email": user.email}
+    router_app.add_api_route(
+        "/__test_admin_only", _admin, dependencies=[Depends(require_role("admin"))]
+    )
+    router_app.add_api_route(
+        "/__test_any",
+        _any,
+        dependencies=[Depends(require_role("admin", "operator"))],
+    )
 
     try:
         with TestClient(router_app) as tc:
             yield tc
     finally:
-        router_app.dependency_overrides.pop(get_session, None)
+        router_app.dependency_overrides.clear()
 
 
 def test_require_role_accepts_exact_match(

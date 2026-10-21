@@ -15,7 +15,7 @@ Environment=HOME=/opt/sunday-voice
 # The leading '+' runs this step as root regardless of User= above.
 ExecStartPre=+/bin/bash -c 'test -d /opt/sunday-voice/frontend/node_modules && chown -R sundayvoice:sundayvoice /opt/sunday-voice/frontend/node_modules || true'
 # npm ci installs from the lockfile; npm run build writes to frontend/dist.
-ExecStart=/usr/bin/npm ci --prefer-offline
-ExecStart=/usr/bin/npm run build
+ExecStart=/usr/bin/env npm ci --include=dev --prefer-offline
+ExecStart=/usr/bin/env npm run build
 StandardOutput=journal
 StandardError=journal

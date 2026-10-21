@@ -91,22 +91,12 @@ frontend_changed() {
 }
 
 build_frontend() {
-    info "Building React frontend..."
-    # Fix ownership of node_modules in case a previous run wrote it as a
-    # different user (e.g. root ran npm manually).  npm ci will fail with
-    # EACCES if it cannot unlink files it doesn't own.
-    if [[ -d "$APP_DIR/frontend/node_modules" ]]; then
-        info "Resetting node_modules ownership to $APP_USER..."
-        chown -R "$APP_USER:$APP_USER" "$APP_DIR/frontend/node_modules"
-    fi
-    # Use the systemd one-shot unit so the build runs under the right user and
-    # environment.  If not running under systemd (e.g., CI), fall back to direct npm.
-    if systemctl is-active --quiet sunday-voice-api 2>/dev/null || \
-       systemctl is-enabled --quiet sunday-voice-frontend-build 2>/dev/null; then
-        systemctl start sunday-voice-frontend-build
-    else
-        as_app bash -c "cd '$APP_DIR/frontend' && HOME='$APP_DIR' npm ci --prefer-offline && npm run build"
-    fi
+    info "Building React frontend as $APP_USER..."
+    (
+        cd "$APP_DIR/frontend"
+        as_app env HOME="$APP_DIR" npm ci --include=dev --prefer-offline
+        as_app env HOME="$APP_DIR" npm run build
+    )
     info "Frontend build complete."
 }
 
