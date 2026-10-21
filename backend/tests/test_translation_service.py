@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from unittest.mock import AsyncMock
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -17,13 +18,12 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from app.models.role import Role
 from app.models.segment import TranscriptSegment, TranslationSegment
 from app.models.session import Session, SessionLanguage, SessionStatus
-from app.models.role import Role
 from app.models.user import User
 from app.services.pubsub import TranscriptEvent, transcript_pubsub
 from app.services.translation import TranslationFanout
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -88,33 +88,47 @@ def _reset_transcript_pubsub() -> None:
 
 
 @pytest_asyncio.fixture
-async def db_maker() -> async_sessionmaker[AsyncSession]:
-    """In-memory SQLite DB with required tables."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        for model in (Role, User, Session, SessionLanguage, TranscriptSegment, TranslationSegment):
-            await conn.run_sync(
-                lambda sync_conn, m=model: m.__table__.create(sync_conn, checkfirst=True)
+async def db_maker(tmp_path: Path) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Create a file-backed SQLite DB so concurrent tasks use independent connections."""
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'translation.db'}",
+        future=True,
+        connect_args={"timeout": 30},
+    )
+    try:
+        async with engine.begin() as conn:
+            for model in (
+                Role,
+                User,
+                Session,
+                SessionLanguage,
+                TranscriptSegment,
+                TranslationSegment,
+            ):
+                await conn.run_sync(
+                    lambda sync_conn, m=model: m.__table__.create(sync_conn, checkfirst=True)
+                )
+
+        maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
+
+        # Seed role + user for FK constraints.
+        async with maker() as db:
+            role = Role(name="operator", description="Operator role")
+            db.add(role)
+            await db.flush()
+
+            user = User(
+                email="test@example.com",
+                hashed_password="fakehash",
+                display_name="Test",
+                role_id=role.id,
             )
+            db.add(user)
+            await db.commit()
 
-    maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
-
-    # Seed role + user for FK constraints.
-    async with maker() as db:
-        role = Role(name="operator", description="Operator role")
-        db.add(role)
-        await db.flush()
-
-        user = User(
-            email="test@example.com",
-            hashed_password="fakehash",
-            display_name="Test",
-            role_id=role.id,
-        )
-        db.add(user)
-        await db.commit()
-
-    return maker
+        yield maker
+    finally:
+        await engine.dispose()
 
 
 @pytest_asyncio.fixture
@@ -178,7 +192,7 @@ class TestTranslationFanout:
         db_maker: async_sessionmaker[AsyncSession],
         session_id: uuid.UUID,
     ) -> None:
-        seg_id = await _add_transcript_segment(db_maker, session_id, 1, "Good morning")
+        await _add_transcript_segment(db_maker, session_id, 1, "Good morning")
 
         provider = FakeTranslationProvider()
         redis = FakeRedis()
@@ -295,7 +309,7 @@ class TestTranslationFanout:
             for ch, msg in redis.published
             if not ch.endswith(":lang:en")
         ]
-        for channel, data in translated:
+        for _channel, data in translated:
             assert data["session_id"] == str(session_id)
             assert data["sequence"] == 1
             assert data["source_language"] == "en"
